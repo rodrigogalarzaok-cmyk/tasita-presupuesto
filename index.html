@@ -2836,7 +2836,10 @@ function inicioPrueba() {
   let t = parseInt(localStorage.getItem(INICIO_KEY) || '', 10);
   if (!t || isNaN(t)) {
     t = Date.now();
-    localStorage.setItem(INICIO_KEY, String(t));
+    // Mientras el cobro esté apagado NO se guarda: si se guardara, los usuarios
+    // de la beta llegarían con la prueba ya vencida el día que se prenda el cobro.
+    // Así, cada uno arranca sus 14 días la primera vez que abre la app ya cobrando.
+    if (PAGOS.COBRO_ACTIVO) localStorage.setItem(INICIO_KEY, String(t));
   }
   return t;
 }
@@ -2898,7 +2901,11 @@ function aplicarPaywall() {
 function openSuscripcion() {
   const ov = document.getElementById('paywall-overlay');
   const s = estadoSuscripcion();
-  if (s.estado === 'activa') {
+  if (!PAGOS.COBRO_ACTIVO) {
+    // Beta: todavía no se cobra. No prometer días de prueba que no corren.
+    document.getElementById('paywall-title').textContent = 'Gratis en beta';
+    document.getElementById('paywall-sub').textContent   = 'Por ahora Tasita es gratis. Así va a ser la suscripción cuando la lancemos:';
+  } else if (s.estado === 'activa') {
     document.getElementById('paywall-title').textContent = 'Suscripción activa';
     document.getElementById('paywall-sub').textContent   = 'Gracias por bancar Tasita 💙 Renovación: ' + fechaLinda(s.hasta);
   } else if (s.estado === 'prueba') {
@@ -2986,7 +2993,6 @@ renderHome();
 updateFechaLabel();
 actualizarSaludo();
 miCodigo();      // genera el código anónimo la primera vez
-inicioPrueba();  // marca el arranque de la prueba la primera vez
 actualizarSubUI();
 aplicarPaywall();
 // Revalida contra el servidor en segundo plano (si no hay base conectada, no hace nada)
