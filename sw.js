@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tasita-v1';
+const CACHE_NAME = 'tasita-v3';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -33,7 +33,7 @@ self.addEventListener('fetch', (e) => {
 
   if (isHTML) {
     e.respondWith(
-      fetch(e.request)
+      fetch(e.request, { cache: 'no-store' })
         .then((res) => {
           const clone = res.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(e.request, clone));

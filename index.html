@@ -1122,6 +1122,34 @@
       </div>
     </div>
     <div class="section" style="margin-top:8px">
+      <div class="card" style="padding:0">
+        <div class="modal-row" style="padding:14px 20px" onclick="openSuscripcion()">
+          <div class="modal-row-left">
+            <div class="modal-row-icon">⭐</div>
+            <div>
+              <div style="font-weight:600;font-size:15px">Suscripción</div>
+              <div id="sub-estado-label" style="font-size:12px;color:var(--text3);margin-top:2px"></div>
+            </div>
+          </div>
+          <div style="color:var(--text3);font-size:13px">›</div>
+        </div>
+      </div>
+    </div>
+    <div class="section" style="margin-top:8px">
+      <div class="card" style="padding:0">
+        <div class="modal-row" style="padding:14px 20px" onclick="copiarCodigo()">
+          <div class="modal-row-left">
+            <div class="modal-row-icon">🔑</div>
+            <div>
+              <div style="font-weight:600;font-size:15px">Mi código</div>
+              <div id="mas-codigo-label" style="font-size:12px;color:var(--text3);margin-top:2px;font-family:monospace"></div>
+            </div>
+          </div>
+          <div style="color:var(--text3);font-size:13px">copiar</div>
+        </div>
+      </div>
+    </div>
+    <div class="section" style="margin-top:8px">
       <div class="card" style="padding:0;border:1px solid rgba(220,50,50,0.3)">
         <div class="modal-row" style="padding:16px 20px" onclick="clearData()">
           <div class="modal-row-left"><div class="modal-row-icon" style="background:rgba(220,50,50,0.15)">🗑️</div><span style="color:#e05555">Borrar datos del mes actual</span></div>
@@ -1296,6 +1324,52 @@
       />
       <div class="welcome-btn disabled" id="welcome-btn" onclick="confirmWelcome()">
         Empezar 🚀
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════ PAYWALL / SUSCRIPCIÓN ══════════════════ -->
+  <div class="welcome-overlay" id="paywall-overlay" style="z-index:500">
+    <div class="welcome-card">
+      <div class="welcome-logo">
+        <div class="logo-icon" style="width:52px;height:52px">
+          <svg viewBox="0 0 100 100" width="34" height="34" xmlns="http://www.w3.org/2000/svg">
+            <path d="M38 18 Q35 12 38 7" stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <path d="M50 18 Q47 12 50 7" stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <path d="M18 28 Q18 82 50 82 Q82 82 82 28 Z" fill="white"/>
+            <path d="M82 38 Q96 38 96 55 Q96 72 82 72" stroke="white" stroke-width="8" fill="none" stroke-linecap="round"/>
+            <path d="M24 34 Q24 76 50 76 Q76 76 76 34 Z" fill="#030d19"/>
+            <rect x="32" y="58" width="10" height="14" rx="2" fill="#00e5ff"/>
+            <rect x="45" y="48" width="10" height="24" rx="2" fill="#00e5ff"/>
+            <rect x="58" y="38" width="10" height="34" rx="2" fill="#00e5ff"/>
+          </svg>
+        </div>
+      </div>
+      <div class="welcome-title" id="paywall-title">Tu prueba terminó</div>
+      <div class="welcome-sub" id="paywall-sub">Seguí usando Tasita con todos tus datos intactos.</div>
+
+      <div style="background:rgba(77,184,255,0.08);border:1px solid rgba(77,184,255,0.22);border-radius:16px;padding:16px 18px;margin-bottom:18px">
+        <div style="display:flex;align-items:baseline;justify-content:center;gap:6px;margin-bottom:12px">
+          <span style="font-size:30px;font-weight:800;color:var(--accent);letter-spacing:-1px" id="paywall-precio">$3.500</span>
+          <span style="font-size:13px;color:var(--text3)">/ mes</span>
+        </div>
+        <div style="font-size:13px;color:var(--text2);line-height:1.9">
+          <div>✓ Movimientos ilimitados</div>
+          <div>✓ Tus datos guardados y respaldados</div>
+          <div>✓ Presupuestos y gráficos completos</div>
+          <div>✓ Cancelás cuando quieras</div>
+        </div>
+      </div>
+
+      <div class="welcome-btn" id="paywall-btn" onclick="irAPagar()">
+        Suscribirme
+      </div>
+      <div onclick="yaPague()" style="text-align:center;font-size:13px;color:var(--accent);margin-top:16px;cursor:pointer;font-weight:600">
+        Ya pagué, activar
+      </div>
+      <div id="paywall-msg" style="font-size:12px;color:var(--text3);text-align:center;margin-top:12px;line-height:1.5"></div>
+      <div style="text-align:center;font-size:11px;color:var(--text3);margin-top:18px;opacity:0.7">
+        Tu código: <span id="paywall-codigo" style="font-family:monospace;letter-spacing:0.5px"></span>
       </div>
     </div>
   </div>
@@ -1961,6 +2035,7 @@ function goTo(name, keepMes) {
     }
   }
   if (name==='presupuestos') { presupMesSel = nowMonth(); renderPresupuestos(); }
+  if (name==='mas') actualizarSubUI();
   if (name==='presup-detalle') {
     // mantener nav Presupuestos activo
     const navP = document.getElementById('nav-presupuestos');
@@ -2720,6 +2795,189 @@ function openCambiarNombre() {
 }
 
 // ════════════════════════════════════════
+//  SUSCRIPCIÓN
+//  ─────────────────────────────────────
+//  ⚙️ ÚNICO LUGAR PARA TOCAR AL LANZAR EL COBRO:
+// ════════════════════════════════════════
+const PAGOS = {
+  // Poner en true recién cuando el link de Mercado Pago esté creado y probado.
+  // Mientras esté en false la app funciona gratis para todos, como hasta ahora.
+  COBRO_ACTIVO: false,
+
+  // Precio mensual (solo se muestra en pantalla; el cobro real lo define el plan de MP)
+  PRECIO: 3500,
+
+  // Días de prueba gratis desde el primer uso
+  DIAS_PRUEBA: 14,
+
+  // Link del plan de suscripción de Mercado Pago (ej: https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_plan_id=XXXX)
+  LINK_MP: '',
+
+  // Backend que confirma el pago. Vacío = todavía no hay base de datos conectada.
+  SUPABASE_URL: '',
+  SUPABASE_KEY: ''
+};
+
+const ID_KEY     = 'tasita_id';      // código anónimo del usuario
+const INICIO_KEY = 'tasita_inicio';  // timestamp del primer uso (para la prueba)
+const SUB_KEY    = 'tasita_sub';     // caché de lo que dijo el servidor
+
+// ── Identidad anónima: la app se genera sola un código. El usuario no escribe nada.
+function miCodigo() {
+  let id = localStorage.getItem(ID_KEY);
+  if (!id) {
+    id = 'tas_' + Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 6);
+    localStorage.setItem(ID_KEY, id);
+  }
+  return id;
+}
+
+function inicioPrueba() {
+  let t = parseInt(localStorage.getItem(INICIO_KEY) || '', 10);
+  if (!t || isNaN(t)) {
+    t = Date.now();
+    localStorage.setItem(INICIO_KEY, String(t));
+  }
+  return t;
+}
+
+// ── Estado actual: 'activa' (pagó) | 'prueba' (le quedan días) | 'vencida'
+function estadoSuscripcion() {
+  const cache = JSON.parse(localStorage.getItem(SUB_KEY) || 'null');
+  if (cache && cache.hasta) {
+    // 'hasta' es 'YYYY-MM-DD'. Se compara con la fecha local, nunca con UTC.
+    const hoy = todayISO();
+    if (cache.hasta >= hoy) return { estado: 'activa', hasta: cache.hasta };
+  }
+  const diasPasados = Math.floor((Date.now() - inicioPrueba()) / 86400000);
+  const restantes = PAGOS.DIAS_PRUEBA - diasPasados;
+  if (restantes > 0) return { estado: 'prueba', diasRestantes: restantes };
+  return { estado: 'vencida' };
+}
+
+function tieneAcceso() {
+  if (!PAGOS.COBRO_ACTIVO) return true;   // cobro apagado = todos entran
+  return estadoSuscripcion().estado !== 'vencida';
+}
+
+// ── Le pregunta al servidor si este código tiene la suscripción paga.
+//    Si todavía no hay base conectada, no hace nada y no rompe.
+async function verificarSuscripcion() {
+  if (!PAGOS.SUPABASE_URL || !PAGOS.SUPABASE_KEY) return null;
+  try {
+    const r = await fetch(
+      `${PAGOS.SUPABASE_URL}/rest/v1/suscripciones?codigo=eq.${encodeURIComponent(miCodigo())}&select=activa,hasta`,
+      { headers: { apikey: PAGOS.SUPABASE_KEY, Authorization: `Bearer ${PAGOS.SUPABASE_KEY}` } }
+    );
+    if (!r.ok) return null;
+    const filas = await r.json();
+    const fila = filas && filas[0];
+    if (fila && fila.activa && fila.hasta) {
+      localStorage.setItem(SUB_KEY, JSON.stringify({ hasta: fila.hasta }));
+      return fila;
+    }
+    localStorage.removeItem(SUB_KEY);
+    return null;
+  } catch (e) {
+    // Sin internet: se respeta lo último que se sabía (la PWA sigue andando offline).
+    console.warn('No se pudo verificar la suscripción:', e);
+    return null;
+  }
+}
+
+// ── Muestra u oculta el paywall según el estado
+function aplicarPaywall() {
+  const ov = document.getElementById('paywall-overlay');
+  if (!ov) return;
+  if (tieneAcceso()) { ov.classList.remove('open'); return; }
+  document.getElementById('paywall-title').textContent = 'Tu prueba terminó';
+  document.getElementById('paywall-sub').textContent   = 'Seguí usando Tasita con todos tus datos intactos.';
+  ov.classList.add('open');
+}
+
+function openSuscripcion() {
+  const ov = document.getElementById('paywall-overlay');
+  const s = estadoSuscripcion();
+  if (s.estado === 'activa') {
+    document.getElementById('paywall-title').textContent = 'Suscripción activa';
+    document.getElementById('paywall-sub').textContent   = 'Gracias por bancar Tasita 💙 Renovación: ' + fechaLinda(s.hasta);
+  } else if (s.estado === 'prueba') {
+    document.getElementById('paywall-title').textContent = 'Estás en prueba gratis';
+    document.getElementById('paywall-sub').textContent   = `Te ${s.diasRestantes === 1 ? 'queda' : 'quedan'} ${s.diasRestantes} ${s.diasRestantes === 1 ? 'día' : 'días'}. Podés suscribirte cuando quieras.`;
+  } else {
+    document.getElementById('paywall-title').textContent = 'Tu prueba terminó';
+    document.getElementById('paywall-sub').textContent   = 'Seguí usando Tasita con todos tus datos intactos.';
+  }
+  document.getElementById('paywall-msg').textContent = '';
+  ov.classList.add('open');
+}
+
+function irAPagar() {
+  if (!PAGOS.LINK_MP) {
+    document.getElementById('paywall-msg').textContent = 'La suscripción todavía no está disponible. ¡Muy pronto!';
+    return;
+  }
+  // El código viaja a Mercado Pago y vuelve en el webhook para quedar pegado al pago.
+  const url = PAGOS.LINK_MP + (PAGOS.LINK_MP.includes('?') ? '&' : '?') +
+              'external_reference=' + encodeURIComponent(miCodigo());
+  window.open(url, '_blank', 'noopener');
+}
+
+async function yaPague() {
+  const msg = document.getElementById('paywall-msg');
+  msg.style.color = 'var(--text3)';
+  msg.textContent = 'Verificando…';
+  const ok = await verificarSuscripcion();
+  if (ok) {
+    msg.style.color = '#4ADE80';
+    msg.textContent = '¡Listo! Suscripción activada 🎉';
+    actualizarSubUI();
+    setTimeout(() => document.getElementById('paywall-overlay').classList.remove('open'), 1200);
+  } else {
+    msg.style.color = '#e05555';
+    msg.textContent = PAGOS.SUPABASE_URL
+      ? 'Todavía no vemos el pago. Si recién pagaste, esperá un minuto y probá de nuevo.'
+      : 'Todavía no podemos verificar pagos. Escribinos por Instagram y lo activamos a mano.';
+  }
+}
+
+function fechaLinda(iso) {
+  if (!iso) return '';
+  const [a, m, d] = iso.split('-');
+  return `${d}/${m}/${a}`;
+}
+
+function copiarCodigo() {
+  const cod = miCodigo();
+  const done = () => {
+    const l = document.getElementById('mas-codigo-label');
+    if (!l) return;
+    const antes = l.textContent;
+    l.textContent = '¡Copiado!';
+    setTimeout(() => { l.textContent = antes; }, 1400);
+  };
+  if (navigator.clipboard) navigator.clipboard.writeText(cod).then(done).catch(done);
+  else done();
+}
+
+function actualizarSubUI() {
+  const cod = document.getElementById('mas-codigo-label');
+  if (cod) cod.textContent = miCodigo();
+  const lbl = document.getElementById('sub-estado-label');
+  if (lbl) {
+    const s = estadoSuscripcion();
+    if (!PAGOS.COBRO_ACTIVO)          lbl.textContent = 'Gratis mientras estamos en beta';
+    else if (s.estado === 'activa')   lbl.textContent = 'Activa hasta ' + fechaLinda(s.hasta);
+    else if (s.estado === 'prueba')   lbl.textContent = `Prueba gratis · ${s.diasRestantes} ${s.diasRestantes === 1 ? 'día' : 'días'}`;
+    else                              lbl.textContent = 'Vencida — tocá para suscribirte';
+  }
+  const precio = document.getElementById('paywall-precio');
+  if (precio) precio.textContent = '$' + PAGOS.PRECIO.toLocaleString('es-AR');
+  const codPw = document.getElementById('paywall-codigo');
+  if (codPw) codPw.textContent = miCodigo();
+}
+
+// ════════════════════════════════════════
 //  INIT
 // ════════════════════════════════════════
 applyTheme(temaActual);
@@ -2727,6 +2985,12 @@ loadData();
 renderHome();
 updateFechaLabel();
 actualizarSaludo();
+miCodigo();      // genera el código anónimo la primera vez
+inicioPrueba();  // marca el arranque de la prueba la primera vez
+actualizarSubUI();
+aplicarPaywall();
+// Revalida contra el servidor en segundo plano (si no hay base conectada, no hace nada)
+verificarSuscripcion().then(() => { actualizarSubUI(); aplicarPaywall(); });
 
 // Mes actual dinámico
 const mesCorto = new Date().toLocaleDateString('es-AR', { month: 'long' });
