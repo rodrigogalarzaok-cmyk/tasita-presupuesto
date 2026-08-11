@@ -1135,7 +1135,9 @@
         </div>
       </div>
     </div>
-    <div class="section" style="margin-top:8px">
+    <!-- Solo aparece con el cobro prendido: hasta entonces es una tripa del sistema
+         que al usuario no le dice nada. El código se genera y funciona igual. -->
+    <div class="section" style="margin-top:8px" id="codigo-section">
       <div class="card" style="padding:0">
         <div class="modal-row" style="padding:14px 20px" onclick="copiarCodigo()">
           <div class="modal-row-left">
@@ -2970,6 +2972,8 @@ function copiarCodigo() {
 function actualizarSubUI() {
   const cod = document.getElementById('mas-codigo-label');
   if (cod) cod.textContent = miCodigo();
+  const codSec = document.getElementById('codigo-section');
+  if (codSec) codSec.style.display = PAGOS.COBRO_ACTIVO ? '' : 'none';
   const lbl = document.getElementById('sub-estado-label');
   if (lbl) {
     const s = estadoSuscripcion();
