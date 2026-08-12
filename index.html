@@ -3122,8 +3122,13 @@ async function sincronizar() {
     if (res.sinCambios) { localStorage.setItem(VER_KEY, String(res.version)); return; }
 
     aplicarRemoto(res);
-    // La base todavía no tiene lo de este celular (o le falta algo): se sube.
-    await subirDatos();
+
+    // Solo se sube si hay algo distinto que guardar. Sin esto, alguien que
+    // abre la app por primera vez y no carga nada igual gastaría una
+    // escritura, y quien no tocó nada gastaría otra en cada arranque.
+    const contenido = JSON.stringify({ txs: transactions, borrados: leerBorrados() });
+    const nadaQueGuardar = transactions.length === 0 && leerBorrados().length === 0;
+    if (!nadaQueGuardar && contenido !== (res.contenido || '')) await subirDatos();
   } catch (e) {
     // Sin internet: la app sigue andando con lo que tiene guardado.
   }
