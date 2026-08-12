@@ -31,6 +31,9 @@ export default {
       if (url.pathname === '/datos' && request.method === 'PUT') {
         return await putDatos(request, env);
       }
+      if (url.pathname === '/email' && request.method === 'POST') {
+        return await registrarEmail(request, env);
+      }
       if (url.pathname === '/' || url.pathname === '/salud') {
         return responder({ ok: true, servicio: 'tasita-api' }, 200, env);
       }
@@ -131,6 +134,69 @@ function codigoValido(c) {
   return /^tas_[a-z0-9]{4,20}$/i.test(s) ? s : null;
 }
 
+function emailValido(e) {
+  const s = String(e || '').trim().toLowerCase();
+  return s.length <= 120 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s) ? s : null;
+}
+
+// ── La app avisa con qué email va a pagar esta persona.
+//    Si resulta que ya había pagado antes de dejarlo, se activa en el momento.
+async function registrarEmail(request, env) {
+  let cuerpo;
+  try { cuerpo = await request.json(); } catch { return responder({ error: 'cuerpo inválido' }, 400, env); }
+
+  const codigo = codigoValido(cuerpo && cuerpo.codigo);
+  const email  = emailValido(cuerpo && cuerpo.email);
+  if (!codigo) return responder({ error: 'código inválido' }, 400, env);
+  if (!email)  return responder({ error: 'email inválido' }, 400, env);
+
+  // Un email pago no se le puede pegar a otro código. Sin esto, cualquiera que
+  // conozca el email de un suscriptor lo carga en su app y se queda con la
+  // suscripción ajena — y en la renovación el pago se le acreditaría al ladrón,
+  // dejando afuera a quien paga.
+  const duenio = await env.DB.prepare(
+    'SELECT codigo, hasta FROM suscripciones WHERE email = ? AND activa = 1 LIMIT 1'
+  ).bind(email).first();
+
+  if (duenio && duenio.codigo !== codigo && duenio.hasta && duenio.hasta >= hoyISO()) {
+    return responder({ error: 'email en uso', ocupado: true }, 409, env);
+  }
+
+  const ahora = new Date().toISOString();
+  await env.DB.prepare(`
+    INSERT INTO suscripciones (codigo, activa, email, actualizado)
+    VALUES (?, 0, ?, ?)
+    ON CONFLICT(codigo) DO UPDATE SET email = excluded.email, actualizado = excluded.actualizado
+  `).bind(codigo, email, ahora).run();
+
+  // ¿Pagó antes de dejar el email? El aviso quedó guardado esperando.
+  const ev = await env.DB.prepare(`
+    SELECT mp_id, hasta FROM eventos_mp
+    WHERE email = ? AND hasta IS NOT NULL AND estado IN ('approved', 'authorized')
+    ORDER BY id DESC LIMIT 1
+  `).bind(email).first();
+
+  if (ev && ev.hasta >= hoyISO()) {
+    await activarSuscripcion(env, codigo, ev.hasta, ev.mp_id, email);
+    return responder({ activa: true, hasta: ev.hasta }, 200, env);
+  }
+  return responder({ activa: false }, 200, env);
+}
+
+// Deja la suscripción paga y vigente. Nunca acorta una vigencia ya dada.
+async function activarSuscripcion(env, codigo, hasta, mpId, email) {
+  await env.DB.prepare(`
+    INSERT INTO suscripciones (codigo, activa, hasta, email, mp_id, actualizado)
+    VALUES (?, 1, ?, ?, ?, ?)
+    ON CONFLICT(codigo) DO UPDATE SET
+      activa      = 1,
+      hasta       = MAX(COALESCE(suscripciones.hasta, ''), COALESCE(excluded.hasta, '')),
+      email       = COALESCE(excluded.email, suscripciones.email),
+      mp_id       = excluded.mp_id,
+      actualizado = excluded.actualizado
+  `).bind(codigo, hasta, email || null, mpId || null, new Date().toISOString()).run();
+}
+
 // ── Mercado Pago avisa que pasó algo con un pago o una suscripción.
 //    Nunca se confía en el cuerpo del aviso: se le vuelve a preguntar a MP
 //    con el token secreto, porque cualquiera puede hacer POST a esta URL.
@@ -146,39 +212,46 @@ async function webhookMP(request, url, env) {
 
   // Siempre se responde 200: si se devuelve error, MP reintenta el mismo aviso durante días.
   if (!mpId || !env.MP_ACCESS_TOKEN) {
-    await registrar(env, tipo, mpId, null, 'ignorado', crudo);
+    await registrar(env, tipo, mpId, null, null, 'ignorado', null, crudo);
     return responder({ ok: true }, 200, env);
   }
 
   const recurso = await traerDeMP(tipo, mpId, env);
   if (!recurso) {
-    await registrar(env, tipo, mpId, null, 'no se pudo consultar', crudo);
+    await registrar(env, tipo, mpId, null, null, 'no se pudo consultar', null, crudo);
     return responder({ ok: true }, 200, env);
   }
 
-  const codigo = (recurso.external_reference || '').trim();
   const estado = recurso.status || '';
+  const email  = emailValido(recurso.payer_email);
+  const paga   = estado === 'approved' || estado === 'authorized';
+  const hasta  = paga ? calcularHasta(recurso) : null;
 
-  if (!/^tas_[a-z0-9]{4,20}$/i.test(codigo)) {
-    // Pago sin código: se guarda igual para poder activarlo a mano desde la base.
-    await registrar(env, tipo, mpId, codigo || null, estado, crudo);
-    return responder({ ok: true }, 200, env);
+  // ¿De quién es este pago? Si vino el código, se usa; si no, se busca por el
+  // email que la persona dejó al ir a pagar.
+  let codigo = codigoValido(recurso.external_reference);
+  if (!codigo && email) {
+    // Si ya hay una suscripción activa con ese email, la renovación es de ella.
+    // Recién si no hay ninguna se usa el registro más reciente.
+    const fila = await env.DB.prepare(
+      'SELECT codigo FROM suscripciones WHERE email = ? ORDER BY activa DESC, actualizado DESC LIMIT 1'
+    ).bind(email).first();
+    if (fila) codigo = fila.codigo;
   }
 
-  const paga = estado === 'approved' || estado === 'authorized';
-  const hasta = paga ? calcularHasta(recurso) : null;
+  // Se guarda SIEMPRE el aviso, tenga dueño o no: si la persona todavía no dejó
+  // su email, queda esperando y se activa sola en cuanto lo haga.
+  await registrar(env, tipo, mpId, codigo, email, estado, hasta, crudo);
 
-  await env.DB.prepare(`
-    INSERT INTO suscripciones (codigo, activa, hasta, mp_id, actualizado)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(codigo) DO UPDATE SET
-      activa      = excluded.activa,
-      hasta       = MAX(COALESCE(suscripciones.hasta, ''), COALESCE(excluded.hasta, '')),
-      mp_id       = excluded.mp_id,
-      actualizado = excluded.actualizado
-  `).bind(codigo, paga ? 1 : 0, hasta, mpId, new Date().toISOString()).run();
-
-  await registrar(env, tipo, mpId, codigo, estado, crudo);
+  if (codigo) {
+    if (paga && hasta) {
+      await activarSuscripcion(env, codigo, hasta, mpId, email);
+    } else {
+      // Cancelada o pausada: se corta el acceso, pero la fila queda.
+      await env.DB.prepare('UPDATE suscripciones SET activa = 0, actualizado = ? WHERE codigo = ?')
+        .bind(new Date().toISOString(), codigo).run();
+    }
+  }
   return responder({ ok: true }, 200, env);
 }
 
@@ -221,11 +294,14 @@ function hoyISO() {
   return [f.getUTCFullYear(), String(f.getUTCMonth() + 1).padStart(2, '0'), String(f.getUTCDate()).padStart(2, '0')].join('-');
 }
 
-async function registrar(env, tipo, mpId, codigo, estado, crudo) {
+async function registrar(env, tipo, mpId, codigo, email, estado, hasta, crudo) {
   try {
     await env.DB.prepare(
-      'INSERT INTO eventos_mp (recibido, tipo, mp_id, codigo, estado, crudo) VALUES (?, ?, ?, ?, ?, ?)'
-    ).bind(new Date().toISOString(), tipo || null, mpId || null, codigo || null, estado || null, (crudo || '').slice(0, 4000)).run();
+      'INSERT INTO eventos_mp (recibido, tipo, mp_id, codigo, email, estado, hasta, crudo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).bind(
+      new Date().toISOString(), tipo || null, mpId || null, codigo || null,
+      email || null, estado || null, hasta || null, (crudo || '').slice(0, 4000)
+    ).run();
   } catch (e) {
     console.error('No se pudo registrar el evento:', e);
   }

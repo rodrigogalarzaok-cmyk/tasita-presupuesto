@@ -1376,6 +1376,34 @@
     </div>
   </div>
 
+  <!-- Email: se pide UNA sola vez, recién al ir a pagar. Nunca para usar la app.
+       Mercado Pago identifica a quien paga por su email; es la única forma de
+       reconocer el pago y activar la suscripción sola. -->
+  <div class="welcome-overlay" id="email-overlay" style="z-index:520">
+    <div class="welcome-card">
+      <div class="welcome-title">Antes de pagar</div>
+      <div class="welcome-sub">
+        Dejanos tu email para reconocer tu pago y activarte la suscripción.
+        Usá el mismo con el que vas a pagar en Mercado Pago.
+      </div>
+      <input
+        class="welcome-input" id="email-input"
+        type="email" inputmode="email" autocomplete="email"
+        placeholder="tuemail@ejemplo.com"
+        maxlength="80"
+        oninput="onEmailInput()"
+        onkeydown="if(event.key==='Enter') confirmarEmail()"
+      />
+      <div class="welcome-btn disabled" id="email-btn" onclick="confirmarEmail()">
+        Continuar al pago
+      </div>
+      <div onclick="cerrarEmail()" style="text-align:center;font-size:13px;color:var(--text3);margin-top:14px;cursor:pointer">
+        Cancelar
+      </div>
+      <div id="email-msg" style="font-size:12px;color:#e05555;text-align:center;margin-top:10px;line-height:1.5"></div>
+    </div>
+  </div>
+
   <!-- ══════════════════ DATE PICKER ══════════════════ -->
   <div class="modal-overlay" id="date-overlay" onclick="closeDatePicker()"></div>
   <div class="modal-sheet" id="dateSheet" style="max-height:520px">
@@ -2814,8 +2842,10 @@ const PAGOS = {
   // Días de prueba gratis desde el primer uso
   DIAS_PRUEBA: 14,
 
-  // Link del plan de suscripción de Mercado Pago (ej: https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_plan_id=XXXX)
-  LINK_MP: '',
+  // Link del plan de suscripción de Mercado Pago ($4.999/mes, creado 2026-08-12).
+  // No sirve agregarle parámetros: el link corto los descarta y el checkout del
+  // plan no acepta external_reference. A quien paga se lo reconoce por su email.
+  LINK_MP: 'https://mpago.la/2sBp5gh',
 
   // Backend que confirma el pago (Cloudflare Worker + D1). Ver api/README.md.
   API_URL: 'https://tasita-api.rodrigogalarzaok.workers.dev'
@@ -2921,15 +2951,87 @@ function openSuscripcion() {
   ov.classList.add('open');
 }
 
+// ── Email: se pide UNA sola vez, recién al ir a pagar.
+//    Mercado Pago identifica a quien paga por su email y NO deja pegarle nuestro
+//    código al link del plan (probado: el link corto se come los parámetros, y
+//    external_reference solo funciona creando la suscripción por API, que exige
+//    el email igual). Así que el email es la forma de reconocer el pago.
+const EMAIL_KEY = 'tasita_email';
+
+function emailGuardado() { return localStorage.getItem(EMAIL_KEY) || ''; }
+function esEmail(e) { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(e || '').trim()); }
+
+function onEmailInput() {
+  const val = document.getElementById('email-input').value;
+  document.getElementById('email-btn').classList.toggle('disabled', !esEmail(val));
+}
+
+function cerrarEmail() { document.getElementById('email-overlay').classList.remove('open'); }
+
 function irAPagar() {
   if (!PAGOS.LINK_MP) {
     document.getElementById('paywall-msg').textContent = 'La suscripción todavía no está disponible. ¡Muy pronto!';
     return;
   }
-  // El código viaja a Mercado Pago y vuelve en el webhook para quedar pegado al pago.
-  const url = PAGOS.LINK_MP + (PAGOS.LINK_MP.includes('?') ? '&' : '?') +
-              'external_reference=' + encodeURIComponent(miCodigo());
-  window.open(url, '_blank', 'noopener');
+  const inp = document.getElementById('email-input');
+  inp.value = emailGuardado();
+  onEmailInput();
+  document.getElementById('email-msg').textContent = '';
+  document.getElementById('email-overlay').classList.add('open');
+  setTimeout(() => inp.focus(), 350);
+}
+
+async function confirmarEmail() {
+  const inp = document.getElementById('email-input');
+  const msg = document.getElementById('email-msg');
+  const email = inp.value.trim().toLowerCase();
+  if (!esEmail(email)) { msg.style.color = '#e05555'; msg.textContent = 'Revisá el email, parece incompleto.'; return; }
+
+  localStorage.setItem(EMAIL_KEY, email);
+  msg.style.color = 'var(--text3)';
+  msg.textContent = 'Guardando…';
+
+  const res = await registrarEmail(email);
+  if (res && res.ocupado) {
+    msg.style.color = '#e05555';
+    msg.textContent = 'Ese email ya tiene una suscripción activa en otro dispositivo. Escribinos por Instagram y te ayudamos.';
+    return;
+  }
+  if (res === false) {
+    msg.style.color = '#e05555';
+    msg.textContent = 'No pudimos guardarlo. Revisá tu conexión e intentá de nuevo.';
+    return;
+  }
+  cerrarEmail();
+
+  // Si ya había pagado con ese email, se activa sin volver a pasar por Mercado Pago.
+  if (res && res.activa && res.hasta) {
+    localStorage.setItem(SUB_KEY, JSON.stringify({ hasta: res.hasta }));
+    actualizarSubUI();
+    aplicarPaywall();
+    const pm = document.getElementById('paywall-msg');
+    pm.style.color = '#4ADE80';
+    pm.textContent = '¡Listo! Suscripción activada 🎉';
+    return;
+  }
+  window.open(PAGOS.LINK_MP, '_blank', 'noopener');
+}
+
+// Le avisa al servidor qué email va a usar este código para pagar.
+async function registrarEmail(email) {
+  if (!PAGOS.API_URL) return null;
+  try {
+    const r = await fetch(PAGOS.API_URL + '/email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codigo: miCodigo(), email })
+    });
+    if (r.status === 409) return await r.json();   // el email ya tiene dueño
+    if (!r.ok) return false;
+    return await r.json();
+  } catch (e) {
+    return false;
+  }
 }
 
 async function yaPague() {
@@ -2945,7 +3047,7 @@ async function yaPague() {
   } else {
     msg.style.color = '#e05555';
     msg.textContent = PAGOS.API_URL
-      ? 'Todavía no vemos el pago. Si recién pagaste, esperá un minuto y probá de nuevo.'
+      ? 'Todavía no vemos el pago. Si recién pagaste esperá un minuto y probá de nuevo. Si pagaste con otro email, tocá "Suscribirme" y cargá ese.'
       : 'Todavía no podemos verificar pagos. Escribinos por Instagram y lo activamos a mano.';
   }
 }
