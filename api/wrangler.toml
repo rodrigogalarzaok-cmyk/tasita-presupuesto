@@ -2,12 +2,11 @@ name = "tasita-api"
 main = "src/worker.js"
 compatibility_date = "2026-08-12"
 
-# Base de datos D1 (SQLite de Cloudflare).
-# El database_id lo completa `npx wrangler d1 create tasita` — ver README.md.
+# Base de datos D1 (SQLite de Cloudflare). Creada el 2026-08-12, región ENAM.
 [[d1_databases]]
 binding = "DB"
 database_name = "tasita"
-database_id = "PENDIENTE"
+database_id = "ceb2843f-f209-4f57-b4b8-8197124a9b7d"
 
 [vars]
 # Origen permitido para llamar a la API desde el navegador.
