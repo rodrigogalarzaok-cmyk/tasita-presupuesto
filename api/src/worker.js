@@ -216,9 +216,11 @@ async function webhookMP(request, url, env) {
     return responder({ ok: true }, 200, env);
   }
 
-  const recurso = await traerDeMP(tipo, mpId, env);
+  const { recurso, httpMP } = await traerDeMP(tipo, mpId, env);
   if (!recurso) {
-    await registrar(env, tipo, mpId, null, null, 'no se pudo consultar', null, crudo);
+    // Se anota QUÉ contestó Mercado Pago: 401 es token vencido o mal cargado,
+    // 404 es que ese pago no existe. Sin este dato hay que adivinar.
+    await registrar(env, tipo, mpId, null, null, `no se pudo consultar (MP ${httpMP})`, null, crudo);
     return responder({ ok: true }, 200, env);
   }
 
@@ -271,26 +273,31 @@ async function traerDeMP(tipo, mpId, env) {
     endpoint = `https://api.mercadopago.com/v1/payments/${mpId}`;          // pago suelto
   }
 
-  const recurso = await pedirAMP(endpoint, env);
-  if (!recurso) return null;
+  const primero = await pedirAMP(endpoint, env);
+  if (!primero.recurso) return { recurso: null, httpMP: primero.http };
 
   // Un cobro mensual apunta a la suscripción de la persona. Se usa esa, que es
   // la que trae el email y hasta cuándo queda paga.
-  const idSub = recurso.preapproval_id;
+  const idSub = primero.recurso.preapproval_id;
   if (idSub) {
     const sub = await pedirAMP(`https://api.mercadopago.com/preapproval/${idSub}`, env);
-    if (sub) return sub;
+    if (sub.recurso) return { recurso: sub.recurso, httpMP: sub.http };
   }
-  return recurso;
+  return { recurso: primero.recurso, httpMP: primero.http };
 }
 
 async function pedirAMP(endpoint, env) {
-  const r = await fetch(endpoint, { headers: { Authorization: `Bearer ${env.MP_ACCESS_TOKEN}` } });
-  if (!r.ok) {
-    console.error('MP respondió', r.status, 'para', endpoint);
-    return null;
+  try {
+    const r = await fetch(endpoint, { headers: { Authorization: `Bearer ${env.MP_ACCESS_TOKEN}` } });
+    if (!r.ok) {
+      console.error('MP respondió', r.status, 'para', endpoint);
+      return { recurso: null, http: r.status };
+    }
+    return { recurso: await r.json(), http: r.status };
+  } catch (e) {
+    console.error('No se pudo llegar a MP:', e);
+    return { recurso: null, http: 'sin respuesta' };
   }
-  return await r.json();
 }
 
 // ── Hasta cuándo vale el acceso.
