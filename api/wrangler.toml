@@ -1,0 +1,17 @@
+name = "tasita-api"
+main = "src/worker.js"
+compatibility_date = "2026-08-12"
+
+# Base de datos D1 (SQLite de Cloudflare).
+# El database_id lo completa `npx wrangler d1 create tasita` — ver README.md.
+[[d1_databases]]
+binding = "DB"
+database_name = "tasita"
+database_id = "PENDIENTE"
+
+[vars]
+# Origen permitido para llamar a la API desde el navegador.
+ORIGEN_APP = "https://presupuesto.tasita.com.ar"
+
+# El token de Mercado Pago NO va acá (es secreto). Se carga una sola vez con:
+#   npx wrangler secret put MP_ACCESS_TOKEN

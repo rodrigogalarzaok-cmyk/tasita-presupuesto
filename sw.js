@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tasita-v5';
+const CACHE_NAME = 'tasita-v6';
 const CORE_ASSETS = [
   './',
   './index.html',
@@ -28,6 +28,11 @@ self.addEventListener('activate', (e) => {
 // cache-first para el resto (íconos, manifest)
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET') return;
+
+  // Las llamadas a otro dominio (la API de suscripciones, la cotización del dólar)
+  // pasan de largo: no se cachean ni se tocan. Si el service worker las intercepta,
+  // rompe el CORS y la app no puede verificar el pago.
+  if (new URL(e.request.url).origin !== self.location.origin) return;
 
   const isHTML = e.request.mode === 'navigate' || e.request.destination === 'document';
 

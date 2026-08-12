@@ -2815,9 +2815,9 @@ const PAGOS = {
   // Link del plan de suscripción de Mercado Pago (ej: https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_plan_id=XXXX)
   LINK_MP: '',
 
-  // Backend que confirma el pago. Vacío = todavía no hay base de datos conectada.
-  SUPABASE_URL: '',
-  SUPABASE_KEY: ''
+  // Backend que confirma el pago (Cloudflare Worker + D1).
+  // Vacío = todavía no hay base de datos conectada. Ej: https://api.tasita.com.ar
+  API_URL: ''
 };
 
 const ID_KEY     = 'tasita_id';      // código anónimo del usuario
@@ -2868,18 +2868,17 @@ function tieneAcceso() {
 // ── Le pregunta al servidor si este código tiene la suscripción paga.
 //    Si todavía no hay base conectada, no hace nada y no rompe.
 async function verificarSuscripcion() {
-  if (!PAGOS.SUPABASE_URL || !PAGOS.SUPABASE_KEY) return null;
+  if (!PAGOS.API_URL) return null;
   try {
     const r = await fetch(
-      `${PAGOS.SUPABASE_URL}/rest/v1/suscripciones?codigo=eq.${encodeURIComponent(miCodigo())}&select=activa,hasta`,
-      { headers: { apikey: PAGOS.SUPABASE_KEY, Authorization: `Bearer ${PAGOS.SUPABASE_KEY}` } }
+      `${PAGOS.API_URL}/suscripcion?codigo=${encodeURIComponent(miCodigo())}`,
+      { cache: 'no-store' }
     );
     if (!r.ok) return null;
-    const filas = await r.json();
-    const fila = filas && filas[0];
-    if (fila && fila.activa && fila.hasta) {
-      localStorage.setItem(SUB_KEY, JSON.stringify({ hasta: fila.hasta }));
-      return fila;
+    const sub = await r.json();
+    if (sub && sub.activa && sub.hasta) {
+      localStorage.setItem(SUB_KEY, JSON.stringify({ hasta: sub.hasta }));
+      return sub;
     }
     localStorage.removeItem(SUB_KEY);
     return null;
@@ -2944,7 +2943,7 @@ async function yaPague() {
     setTimeout(() => document.getElementById('paywall-overlay').classList.remove('open'), 1200);
   } else {
     msg.style.color = '#e05555';
-    msg.textContent = PAGOS.SUPABASE_URL
+    msg.textContent = PAGOS.API_URL
       ? 'Todavía no vemos el pago. Si recién pagaste, esperá un minuto y probá de nuevo.'
       : 'Todavía no podemos verificar pagos. Escribinos por Instagram y lo activamos a mano.';
   }
