@@ -223,7 +223,8 @@ async function webhookMP(request, url, env) {
   }
 
   const estado = recurso.status || '';
-  const email  = emailValido(recurso.payer_email);
+  // Las suscripciones traen 'payer_email'; los pagos sueltos lo traen anidado.
+  const email  = emailValido(recurso.payer_email || (recurso.payer && recurso.payer.email));
   const paga   = estado === 'approved' || estado === 'authorized';
   const hasta  = paga ? calcularHasta(recurso) : null;
 
@@ -256,12 +257,34 @@ async function webhookMP(request, url, env) {
 }
 
 // ── Le pregunta a Mercado Pago por el pago/suscripción real.
+//    Cada tipo de aviso vive en un endpoint distinto. Mandar el id de un cobro
+//    mensual al endpoint de suscripciones devuelve 404 y la renovación se
+//    perdería, así que se elige bien antes de preguntar.
 async function traerDeMP(tipo, mpId, env) {
-  const esSuscripcion = String(tipo).includes('preapproval') || String(tipo).includes('subscription');
-  const endpoint = esSuscripcion
-    ? `https://api.mercadopago.com/preapproval/${mpId}`
-    : `https://api.mercadopago.com/v1/payments/${mpId}`;
+  const t = String(tipo);
+  let endpoint;
+  if (t.includes('authorized_payment')) {
+    endpoint = `https://api.mercadopago.com/authorized_payments/${mpId}`;  // cobro mensual de una suscripción
+  } else if (t.includes('preapproval') || t.includes('subscription')) {
+    endpoint = `https://api.mercadopago.com/preapproval/${mpId}`;          // la suscripción en sí
+  } else {
+    endpoint = `https://api.mercadopago.com/v1/payments/${mpId}`;          // pago suelto
+  }
 
+  const recurso = await pedirAMP(endpoint, env);
+  if (!recurso) return null;
+
+  // Un cobro mensual apunta a la suscripción de la persona. Se usa esa, que es
+  // la que trae el email y hasta cuándo queda paga.
+  const idSub = recurso.preapproval_id;
+  if (idSub) {
+    const sub = await pedirAMP(`https://api.mercadopago.com/preapproval/${idSub}`, env);
+    if (sub) return sub;
+  }
+  return recurso;
+}
+
+async function pedirAMP(endpoint, env) {
   const r = await fetch(endpoint, { headers: { Authorization: `Bearer ${env.MP_ACCESS_TOKEN}` } });
   if (!r.ok) {
     console.error('MP respondió', r.status, 'para', endpoint);
