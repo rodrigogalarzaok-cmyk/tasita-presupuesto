@@ -25,6 +25,12 @@ export default {
       if (url.pathname === '/webhook-mp' && request.method === 'POST') {
         return await webhookMP(request, url, env);
       }
+      if (url.pathname === '/datos' && request.method === 'GET') {
+        return await getDatos(url, env);
+      }
+      if (url.pathname === '/datos' && request.method === 'PUT') {
+        return await putDatos(request, env);
+      }
       if (url.pathname === '/' || url.pathname === '/salud') {
         return responder({ ok: true, servicio: 'tasita-api' }, 200, env);
       }
@@ -39,10 +45,8 @@ export default {
 
 // ── La app pregunta: ¿este código tiene la suscripción al día?
 async function getSuscripcion(url, env) {
-  const codigo = (url.searchParams.get('codigo') || '').trim();
-  if (!/^tas_[a-z0-9]{4,20}$/i.test(codigo)) {
-    return responder({ error: 'código inválido' }, 400, env);
-  }
+  const codigo = codigoValido(url.searchParams.get('codigo'));
+  if (!codigo) return responder({ error: 'código inválido' }, 400, env);
 
   const fila = await env.DB
     .prepare('SELECT activa, hasta FROM suscripciones WHERE codigo = ?')
@@ -57,6 +61,74 @@ async function getSuscripcion(url, env) {
   if (fila.hasta < hoyISO()) return responder({ activa: false, hasta: fila.hasta }, 200, env);
 
   return responder({ activa: true, hasta: fila.hasta }, 200, env);
+}
+
+// ── La app se trae los movimientos guardados.
+//    Si manda la versión que ya tiene y no cambió nada, no se le devuelve el
+//    contenido: se ahorra el tráfico y la app usa lo que tiene en el celular.
+async function getDatos(url, env) {
+  const codigo = codigoValido(url.searchParams.get('codigo'));
+  if (!codigo) return responder({ error: 'código inválido' }, 400, env);
+
+  const version = parseInt(url.searchParams.get('version') || '0', 10) || 0;
+
+  const fila = await env.DB
+    .prepare('SELECT contenido, version FROM datos WHERE codigo = ?')
+    .bind(codigo)
+    .first();
+
+  if (!fila) return responder({ version: 0, contenido: null }, 200, env);
+  if (version && fila.version <= version) {
+    return responder({ sinCambios: true, version: fila.version }, 200, env);
+  }
+  return responder({ version: fila.version, contenido: fila.contenido }, 200, env);
+}
+
+// ── La app guarda sus movimientos. Una fila por persona, se pisa entera.
+async function putDatos(request, env) {
+  let cuerpo;
+  try { cuerpo = await request.json(); } catch { return responder({ error: 'cuerpo inválido' }, 400, env); }
+
+  const codigo = codigoValido(cuerpo && cuerpo.codigo);
+  if (!codigo) return responder({ error: 'código inválido' }, 400, env);
+
+  const contenido = typeof cuerpo.contenido === 'string' ? cuerpo.contenido : null;
+  if (!contenido) return responder({ error: 'falta contenido' }, 400, env);
+
+  // Tope de tamaño: Tasita guarda ingresos y egresos, nada pesado. Sin este
+  // límite, un error en la app (o alguien de mala fe) podría llenar la base.
+  if (contenido.length > 1_000_000) return responder({ error: 'demasiado grande' }, 413, env);
+
+  const base = parseInt(cuerpo.base, 10) || 0;   // versión que la app vio por última vez
+
+  const fila = await env.DB
+    .prepare('SELECT contenido, version FROM datos WHERE codigo = ?')
+    .bind(codigo)
+    .first();
+  const actual = fila ? fila.version : 0;
+
+  // Otro celular guardó primero: no se pisa nada. Se le devuelve lo que hay
+  // para que la app junte los dos lados y vuelva a intentar.
+  if (base !== actual) {
+    return responder({ conflicto: true, version: actual, contenido: fila ? fila.contenido : null }, 409, env);
+  }
+
+  const nueva = actual + 1;
+  await env.DB.prepare(`
+    INSERT INTO datos (codigo, contenido, version, actualizado)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(codigo) DO UPDATE SET
+      contenido   = excluded.contenido,
+      version     = excluded.version,
+      actualizado = excluded.actualizado
+  `).bind(codigo, contenido, nueva, new Date().toISOString()).run();
+
+  return responder({ ok: true, version: nueva }, 200, env);
+}
+
+function codigoValido(c) {
+  const s = String(c || '').trim();
+  return /^tas_[a-z0-9]{4,20}$/i.test(s) ? s : null;
 }
 
 // ── Mercado Pago avisa que pasó algo con un pago o una suscripción.
@@ -165,7 +237,7 @@ function responder(datos, status, env) {
     headers: {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': env.ORIGEN_APP || '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
       'Cache-Control': 'no-store'
     }

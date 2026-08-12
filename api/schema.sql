@@ -23,3 +23,21 @@ CREATE TABLE IF NOT EXISTS eventos_mp (
 );
 
 CREATE INDEX IF NOT EXISTS idx_eventos_codigo ON eventos_mp (codigo);
+
+-- Los movimientos del usuario, guardados como UNA SOLA FILA por persona.
+--
+-- Por qué una fila y no una por movimiento: D1 gratis cobra por filas leídas
+-- y escritas, no por tamaño. La app siempre carga todos los movimientos juntos
+-- (filtra por mes en el celular), así que no gana nada teniéndolos separados.
+-- Así, abrir la app = 1 fila leída y guardar = 1 fila escrita, tenga la persona
+-- 10 movimientos o 10.000. Con 1000 usuarios activos esto usa una fracción
+-- mínima del plan gratis (5 millones de lecturas y 100.000 escrituras por día).
+--
+-- 'version' sube en cada guardado: sirve para que la app no se traiga los datos
+-- si no cambiaron, y para detectar que dos celulares editaron lo mismo.
+CREATE TABLE IF NOT EXISTS datos (
+  codigo      TEXT PRIMARY KEY,
+  contenido   TEXT NOT NULL,               -- JSON: { txs: [...], borrados: [...] }
+  version     INTEGER NOT NULL DEFAULT 1,
+  actualizado TEXT
+);

@@ -1462,7 +1462,9 @@ function loadData() {
   catch { transactions = []; }
 }
 function saveData() {
+  registrarBorrados();   // anota lo que se borró, para que no reviva al sincronizar
   localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
+  programarSync();       // agenda la copia en la base (no bloquea la pantalla)
 }
 
 // ════════════════════════════════════════
@@ -2987,10 +2989,161 @@ function actualizarSubUI() {
 }
 
 // ════════════════════════════════════════
+//  SINCRONIZACIÓN CON LA BASE
+// ════════════════════════════════════════
+//  Los movimientos viajan como UN SOLO bloque por persona, no uno por
+//  movimiento: abrir la app cuesta 1 lectura y guardar cuesta 1 escritura,
+//  tenga 10 movimientos o 10.000. Así entra de sobra en el plan gratis.
+//
+//  El celular manda siempre. localStorage sigue siendo la fuente para dibujar
+//  la pantalla, y la base es la copia de seguridad: si no hay internet la app
+//  funciona igual y sincroniza la próxima vez.
+// ════════════════════════════════════════
+const VER_KEY      = 'tasita_ver';       // última versión del servidor que vimos
+const BORRADOS_KEY = 'tasita_borrados';  // ids borrados, para que no revivan al sincronizar
+const MAX_BORRADOS = 500;
+const ESPERA_SYNC  = 4000;               // junta varios cambios seguidos en una sola escritura
+
+let idsConocidos = null;   // ids que había en el último guardado (para detectar borrados)
+let syncTimer    = null;
+let subiendo     = false;
+
+function leerBorrados() {
+  try { return JSON.parse(localStorage.getItem(BORRADOS_KEY)) || []; } catch { return []; }
+}
+function guardarBorrados(lista) {
+  const unicos = [...new Set(lista.map(String))].slice(-MAX_BORRADOS);
+  localStorage.setItem(BORRADOS_KEY, JSON.stringify(unicos));
+  return unicos;
+}
+
+// Detecta qué movimientos desaparecieron desde el último guardado y los anota.
+// Sin esto, borrar un gasto en un celular y sincronizar lo haría volver.
+function registrarBorrados() {
+  const ahora = new Set(transactions.map(t => String(t.id)));
+  if (idsConocidos) {
+    const nuevos = [];
+    idsConocidos.forEach(id => { if (!ahora.has(id)) nuevos.push(id); });
+    if (nuevos.length) guardarBorrados(leerBorrados().concat(nuevos));
+  }
+  idsConocidos = ahora;
+}
+
+// Junta lo del celular con lo de la base sin perder nada, salvo lo borrado a propósito.
+function fusionarTxs(local, remoto, borrados) {
+  const fuera = new Set(borrados.map(String));
+  const porId = new Map();
+  for (const t of remoto) if (t && !fuera.has(String(t.id))) porId.set(String(t.id), t);
+  for (const t of local)  if (t && !fuera.has(String(t.id))) porId.set(String(t.id), t);
+  return [...porId.values()];
+}
+
+function refrescarPantallas() {
+  renderHome();
+  if (!document.getElementById('view-movimientos').classList.contains('hidden'))   renderMovimientos();
+  if (!document.getElementById('view-presupuestos').classList.contains('hidden'))  renderPresupuestos();
+  if (!document.getElementById('view-presup-detalle').classList.contains('hidden')) refreshDetalleIfOpen();
+}
+
+// Se agenda tras cada cambio. Espera unos segundos por si vienen más.
+function programarSync() {
+  if (!PAGOS.API_URL) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(subirDatos, ESPERA_SYNC);
+}
+
+async function subirDatos(reintento) {
+  if (!PAGOS.API_URL || subiendo) return;
+  subiendo = true;
+  try {
+    const base = parseInt(localStorage.getItem(VER_KEY) || '0', 10) || 0;
+    const contenido = JSON.stringify({ txs: transactions, borrados: leerBorrados() });
+    const r = await fetch(PAGOS.API_URL + '/datos', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ codigo: miCodigo(), contenido, base }),
+      keepalive: true   // que salga aunque se esté cerrando la app
+    });
+
+    if (r.status === 409) {
+      // Otro celular guardó primero. Se juntan los dos lados y se reintenta una vez.
+      const res = await r.json();
+      aplicarRemoto(res);
+      subiendo = false;
+      if (!reintento) await subirDatos(true);
+      return;
+    }
+    if (r.ok) {
+      const res = await r.json();
+      if (res.version) localStorage.setItem(VER_KEY, String(res.version));
+    }
+  } catch (e) {
+    // Sin internet: queda pendiente y se sube en el próximo arranque.
+  } finally {
+    subiendo = false;
+  }
+}
+
+// Mete lo que vino de la base en el celular, sin pisar lo que había.
+function aplicarRemoto(res) {
+  let remotoTxs = [], remotoBorrados = [];
+  if (res.contenido) {
+    try {
+      const c = JSON.parse(res.contenido);
+      remotoTxs      = Array.isArray(c.txs)      ? c.txs      : [];
+      remotoBorrados = Array.isArray(c.borrados) ? c.borrados : [];
+    } catch { /* contenido ilegible: se ignora y manda lo del celular */ }
+  }
+  const borrados = guardarBorrados(leerBorrados().concat(remotoBorrados));
+  const fusion   = fusionarTxs(transactions, remotoTxs, borrados);
+  const cambio   = JSON.stringify(fusion) !== JSON.stringify(transactions);
+
+  transactions = fusion;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(transactions));
+  idsConocidos = new Set(transactions.map(t => String(t.id)));
+  if (res.version) localStorage.setItem(VER_KEY, String(res.version));
+  if (cambio) refrescarPantallas();
+  return cambio;
+}
+
+// Al abrir la app: trae lo que haya en la base y sube lo que falte.
+async function sincronizar() {
+  if (!PAGOS.API_URL) return;
+  try {
+    const ver = parseInt(localStorage.getItem(VER_KEY) || '0', 10) || 0;
+    const r = await fetch(
+      `${PAGOS.API_URL}/datos?codigo=${encodeURIComponent(miCodigo())}&version=${ver}`,
+      { cache: 'no-store' }
+    );
+    if (!r.ok) return;
+    const res = await r.json();
+
+    // Nada cambió del otro lado: no se descarga nada y no se sube nada.
+    if (res.sinCambios) { localStorage.setItem(VER_KEY, String(res.version)); return; }
+
+    aplicarRemoto(res);
+    // La base todavía no tiene lo de este celular (o le falta algo): se sube.
+    await subirDatos();
+  } catch (e) {
+    // Sin internet: la app sigue andando con lo que tiene guardado.
+  }
+}
+
+// Si el usuario cierra o cambia de app, se manda lo pendiente sin esperar.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && syncTimer) {
+    clearTimeout(syncTimer);
+    syncTimer = null;
+    subirDatos();
+  }
+});
+
+// ════════════════════════════════════════
 //  INIT
 // ════════════════════════════════════════
 applyTheme(temaActual);
 loadData();
+idsConocidos = new Set(transactions.map(t => String(t.id)));
 renderHome();
 updateFechaLabel();
 actualizarSaludo();
@@ -2999,6 +3152,8 @@ actualizarSubUI();
 aplicarPaywall();
 // Revalida contra el servidor en segundo plano (si no hay base conectada, no hace nada)
 verificarSuscripcion().then(() => { actualizarSubUI(); aplicarPaywall(); });
+// Trae de la base lo que haya y sube lo que falte (si no hay base, no hace nada)
+sincronizar();
 
 // Mes actual dinámico
 const mesCorto = new Date().toLocaleDateString('es-AR', { month: 'long' });
