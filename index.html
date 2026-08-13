@@ -2839,8 +2839,10 @@ const PAGOS = {
   // Precio mensual (solo se muestra en pantalla; el cobro real lo define el plan de MP)
   PRECIO: 4999,
 
-  // Días de prueba gratis desde el primer uso
-  DIAS_PRUEBA: 14,
+  // Días de prueba gratis. El contador es de CADA persona por separado y
+  // arranca la primera vez que abre la app en su celular, no en una fecha fija.
+  // Así, alguien que la instala dentro de seis meses igual tiene sus 20 días.
+  DIAS_PRUEBA: 20,
 
   // Link del plan de suscripción de Mercado Pago ($4.999/mes, creado 2026-08-12).
   // No sirve agregarle parámetros: el link corto los descarta y el checkout del
@@ -2871,7 +2873,7 @@ function inicioPrueba() {
     t = Date.now();
     // Mientras el cobro esté apagado NO se guarda: si se guardara, los usuarios
     // de la beta llegarían con la prueba ya vencida el día que se prenda el cobro.
-    // Así, cada uno arranca sus 14 días la primera vez que abre la app ya cobrando.
+    // Así, cada uno arranca sus días la primera vez que abre la app ya cobrando.
     if (PAGOS.COBRO_ACTIVO) localStorage.setItem(INICIO_KEY, String(t));
   }
   return t;
