@@ -755,6 +755,21 @@
 <body>
 <div class="phone-shell">
 
+  <!-- Aviso para quien llega desde Instagram: el botón de instalar vive en
+       "Más", donde casi nadie entra, así que si no se avisa acá la persona
+       nunca instala la app y se pierde. Se muestra una sola vez. -->
+  <div id="aviso-instalar" style="display:none;margin:10px 16px 0;padding:12px 14px;border-radius:14px;
+       background:rgba(77,184,255,0.10);border:1px solid rgba(77,184,255,0.28);
+       align-items:center;gap:10px">
+    <div style="flex:1;font-size:12.5px;color:var(--text2);line-height:1.5">
+      Para tener Tasita en tu pantalla de inicio,
+      <span onclick="abrirInstruccionesInApp(navegadorInApp())"
+            style="color:var(--accent);font-weight:700;cursor:pointer;text-decoration:underline">tocá acá</span>.
+    </div>
+    <div onclick="cerrarAvisoInstalar()"
+         style="font-size:18px;color:var(--text3);cursor:pointer;padding:0 4px;line-height:1">×</div>
+  </div>
+
   <!-- ══════════════════ VIEW: INICIO ══════════════════ -->
   <div class="view" id="view-inicio">
 
@@ -1401,6 +1416,21 @@
         Cancelar
       </div>
       <div id="email-msg" style="font-size:12px;color:#e05555;text-align:center;margin-top:10px;line-height:1.5"></div>
+    </div>
+  </div>
+
+  <!-- Instrucciones para salir del navegador de Instagram/Facebook.
+       Esos navegadores no pueden instalar la app: hay que abrirla en el
+       navegador de verdad. Es el camino por el que llega la mayoría. -->
+  <div class="welcome-overlay" id="instalar-overlay" style="z-index:530">
+    <div class="welcome-card">
+      <div class="welcome-title">Instalá Tasita</div>
+      <div class="welcome-sub" id="instalar-texto" style="white-space:pre-line;text-align:left"></div>
+      <div class="welcome-btn" onclick="copiarLinkApp()">Copiar el link</div>
+      <div onclick="cerrarInstalar()" style="text-align:center;font-size:13px;color:var(--text3);margin-top:14px;cursor:pointer">
+        Ahora no
+      </div>
+      <div id="instalar-msg" style="font-size:12px;color:#4ADE80;text-align:center;margin-top:10px;line-height:1.5"></div>
     </div>
   </div>
 
@@ -3286,10 +3316,24 @@ const esStandalone = () =>
   window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 const esIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
 
+// ── Instagram, Facebook y compañía abren los links en un navegador propio,
+//    metido adentro de la app. Desde ahí NO se puede instalar nada, ni en
+//    Android ni en iPhone (en iPhone ni siquiera aparece Compartir). Como la
+//    mayoría llega por Instagram, hay que detectarlo y explicar cómo salir.
+function navegadorInApp() {
+  const ua = navigator.userAgent || '';
+  if (/Instagram/i.test(ua))                       return 'Instagram';
+  if (/FBAN|FBAV|FB_IAB/i.test(ua))                return 'Facebook';
+  if (/BytedanceWebview|musical_ly|TikTok/i.test(ua)) return 'TikTok';
+  if (/LinkedInApp/i.test(ua))                     return 'LinkedIn';
+  return null;
+}
+
 function actualizarInstalarRow() {
   const sub = document.getElementById('instalar-sublabel');
   if (!sub) return;
   if (esStandalone()) sub.textContent = 'Ya instalada ✓';
+  else if (navegadorInApp()) sub.textContent = 'Abrila en tu navegador para instalarla';
   else if (deferredInstallPrompt) sub.textContent = 'Tocá para instalar en tu celular';
   else if (esIOS()) sub.textContent = 'Tocá Compartir 📤 → Agregar a inicio';
   else sub.textContent = 'Agregala a tu pantalla de inicio';
@@ -3306,8 +3350,77 @@ window.addEventListener('appinstalled', () => {
   actualizarInstalarRow();
 });
 
+function cerrarInstalar() {
+  document.getElementById('instalar-overlay').classList.remove('open');
+}
+
+const AVISO_KEY = 'tasita_aviso_instalar';
+
+function cerrarAvisoInstalar() {
+  localStorage.setItem(AVISO_KEY, '1');
+  const a = document.getElementById('aviso-instalar');
+  if (a) a.style.display = 'none';
+}
+
+// Solo se muestra a quien llega por Instagram y compañía, no la tiene instalada
+// y no lo cerró antes. Al resto no le aparece nada.
+function mostrarAvisoInstalarSiHaceFalta() {
+  const a = document.getElementById('aviso-instalar');
+  if (!a) return;
+  const haceFalta = !esStandalone() && navegadorInApp() && !localStorage.getItem(AVISO_KEY);
+  a.style.display = haceFalta ? 'flex' : 'none';
+}
+
+function abrirInstruccionesInApp(app) {
+  const navegador = esIOS() ? 'Safari' : 'Chrome';
+  const puntos    = esIOS() ? '•••' : '⋮';
+  document.getElementById('instalar-texto').textContent =
+    `Estás viendo Tasita dentro de ${app}, y desde acá el celular no deja instalarla.\n\n` +
+    `1. Tocá los ${puntos} arriba a la derecha\n` +
+    `2. Elegí "Abrir en ${navegador}" (o "Abrir en el navegador")\n` +
+    (esIOS()
+      ? `3. Ya en Safari: tocá Compartir 📤 y después "Agregar a inicio"\n\n`
+      : `3. Ahí te va a aparecer el cartel para instalarla\n\n`) +
+    `Si no encontrás esa opción, copiá el link acá abajo y pegalo en ${navegador}.`;
+  document.getElementById('instalar-msg').textContent = '';
+  document.getElementById('instalar-overlay').classList.add('open');
+}
+
+function copiarLinkApp() {
+  const url = 'https://presupuesto.tasita.com.ar';
+  const listo = () => {
+    document.getElementById('instalar-msg').textContent =
+      '¡Link copiado! Pegalo en ' + (esIOS() ? 'Safari' : 'Chrome') + '.';
+  };
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(url).then(listo).catch(() => copiarAlaAntigua(url, listo));
+  } else {
+    copiarAlaAntigua(url, listo);
+  }
+}
+
+// Los navegadores de Instagram y compañía suelen bloquear el portapapeles
+// moderno, así que hace falta el método viejo como respaldo.
+function copiarAlaAntigua(texto, listo) {
+  try {
+    const t = document.createElement('textarea');
+    t.value = texto;
+    t.style.position = 'fixed';
+    t.style.opacity = '0';
+    document.body.appendChild(t);
+    t.select();
+    document.execCommand('copy');
+    document.body.removeChild(t);
+    listo();
+  } catch (e) {
+    document.getElementById('instalar-msg').textContent = 'Copiá esta dirección: presupuesto.tasita.com.ar';
+  }
+}
+
 function clickInstalarApp() {
   if (esStandalone()) { showToast('Tasita ya está instalada en tu celular'); return; }
+  const app = navegadorInApp();
+  if (app) { abrirInstruccionesInApp(app); return; }
   if (deferredInstallPrompt) {
     deferredInstallPrompt.prompt();
     deferredInstallPrompt.userChoice.finally(() => {
@@ -3324,6 +3437,7 @@ function clickInstalarApp() {
 }
 
 actualizarInstalarRow();
+mostrarAvisoInstalarSiHaceFalta();
 </script>
 </body>
 </html>
