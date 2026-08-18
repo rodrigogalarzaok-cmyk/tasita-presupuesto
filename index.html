@@ -755,17 +755,19 @@
 <body>
 <div class="phone-shell">
 
-  <!-- Aviso para quien llega desde Instagram: el botón de instalar vive en
-       "Más", donde casi nadie entra, así que si no se avisa acá la persona
-       nunca instala la app y se pierde. Se muestra una sola vez. -->
+  <!-- Aviso de instalación. El botón de instalar vive en "Más", donde casi
+       nadie entra, así que sin esto la mayoría nunca instala la app. Cubre los
+       tres casos: Chrome (instala de un toque), navegador de Instagram y
+       compañía (explica cómo salir a Chrome) y iPhone (Compartir → Agregar a
+       inicio). Se cierra una sola vez y no vuelve. -->
   <div id="aviso-instalar" style="display:none;margin:10px 16px 0;padding:12px 14px;border-radius:14px;
        background:rgba(77,184,255,0.10);border:1px solid rgba(77,184,255,0.28);
        align-items:center;gap:10px">
-    <div style="flex:1;font-size:12.5px;color:var(--text2);line-height:1.5">
-      Para tener Tasita en tu pantalla de inicio,
-      <span onclick="abrirInstruccionesInApp(navegadorInApp())"
-            style="color:var(--accent);font-weight:700;cursor:pointer;text-decoration:underline">tocá acá</span>.
-    </div>
+    <div id="aviso-instalar-texto" style="flex:1;font-size:12.5px;color:var(--text2);line-height:1.5"></div>
+    <div id="aviso-instalar-btn" onclick="clickInstalarApp()"
+         style="background:linear-gradient(145deg,#82D9FF 0%,#4DB8FF 50%,#2a9de8 100%);
+                color:#02101E;font-weight:700;font-size:12.5px;padding:9px 15px;border-radius:11px;
+                cursor:pointer;white-space:nowrap">Instalar</div>
     <div onclick="cerrarAvisoInstalar()"
          style="font-size:18px;color:var(--text3);cursor:pointer;padding:0 4px;line-height:1">×</div>
   </div>
@@ -3339,15 +3341,20 @@ function actualizarInstalarRow() {
   else sub.textContent = 'Agregala a tu pantalla de inicio';
 }
 
+// Chrome avisa que la app se puede instalar (a veces recién unos segundos
+// después de abrirla), así que el aviso de la pantalla principal se vuelve a
+// dibujar acá: es el único momento en que aparece el botón de un toque.
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredInstallPrompt = e;
   actualizarInstalarRow();
+  mostrarAvisoInstalarSiHaceFalta();
 });
 
 window.addEventListener('appinstalled', () => {
   deferredInstallPrompt = null;
   actualizarInstalarRow();
+  mostrarAvisoInstalarSiHaceFalta();
 });
 
 function cerrarInstalar() {
@@ -3362,13 +3369,33 @@ function cerrarAvisoInstalar() {
   if (a) a.style.display = 'none';
 }
 
-// Solo se muestra a quien llega por Instagram y compañía, no la tiene instalada
-// y no lo cerró antes. Al resto no le aparece nada.
+// Se muestra a quien no la tiene instalada y no cerró el aviso antes:
+//   - Chrome ya ofreció instalarla  → la instala de un toque
+//   - navegador de Instagram y cía. → cómo abrirla en Chrome
+//   - iPhone                        → Compartir 📤 → Agregar a inicio
+// Al resto (un navegador que no ofrece instalar nada) no le aparece nada.
 function mostrarAvisoInstalarSiHaceFalta() {
   const a = document.getElementById('aviso-instalar');
   if (!a) return;
-  const haceFalta = !esStandalone() && navegadorInApp() && !localStorage.getItem(AVISO_KEY);
-  a.style.display = haceFalta ? 'flex' : 'none';
+  if (esStandalone() || localStorage.getItem(AVISO_KEY)) { a.style.display = 'none'; return; }
+
+  const texto = document.getElementById('aviso-instalar-texto');
+  const btn   = document.getElementById('aviso-instalar-btn');
+
+  if (deferredInstallPrompt) {
+    texto.textContent = 'Tené Tasita en tu pantalla de inicio, como cualquier app.';
+    btn.textContent   = 'Instalar';
+  } else if (navegadorInApp()) {
+    texto.textContent = 'Para tenerla en tu pantalla de inicio hay que abrirla en tu navegador.';
+    btn.textContent   = 'Cómo';
+  } else if (esIOS()) {
+    texto.textContent = 'Tené Tasita en tu pantalla de inicio, como cualquier app.';
+    btn.textContent   = 'Cómo';
+  } else {
+    a.style.display = 'none';
+    return;
+  }
+  a.style.display = 'flex';
 }
 
 function abrirInstruccionesInApp(app) {
@@ -3426,6 +3453,7 @@ function clickInstalarApp() {
     deferredInstallPrompt.userChoice.finally(() => {
       deferredInstallPrompt = null;
       actualizarInstalarRow();
+      mostrarAvisoInstalarSiHaceFalta();
     });
     return;
   }
