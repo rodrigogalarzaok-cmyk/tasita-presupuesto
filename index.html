@@ -3348,6 +3348,19 @@ function saltarAChrome() {
   window.location.href = urlChrome();
 }
 
+// ── iPhone. Apple no tiene nada como intent://: una página no puede abrir otro
+//    navegador. Esta dirección especial es lo único que a veces funciona para
+//    salir a Safari desde el navegador de Instagram, y depende de la versión de
+//    esa app, así que puede no prender. Cuando no prende, avisarSiNoSalto
+//    muestra los pasos a mano, que es lo que se hacía hasta ahora.
+function urlSafari() {
+  return 'x-safari-' + location.href;
+}
+
+function saltarASafari() {
+  window.location.href = urlSafari();
+}
+
 // Si el salto no prende (Chrome deshabilitado, o el navegador lo bloquea) no
 // pasa nada visible y la persona queda mirando la pantalla sin entender. A
 // segundo y medio, si seguimos acá, se le explican los pasos a mano.
@@ -3362,6 +3375,7 @@ function actualizarInstalarRow() {
   if (!sub) return;
   if (esStandalone()) sub.textContent = 'Ya instalada ✓';
   else if (navegadorInApp() && esAndroid()) sub.textContent = 'Tocá para abrirla en Chrome e instalarla';
+  else if (navegadorInApp() && esIOS()) sub.textContent = 'Tocá para abrirla en Safari e instalarla';
   else if (navegadorInApp()) sub.textContent = 'Abrila en tu navegador para instalarla';
   else if (deferredInstallPrompt) sub.textContent = 'Tocá para instalar en tu celular';
   else if (esIOS()) sub.textContent = 'Tocá Compartir 📤 → Agregar a inicio';
@@ -3412,7 +3426,7 @@ function mostrarAvisoInstalarSiHaceFalta() {
   if (deferredInstallPrompt) {
     texto.textContent = 'Tené Tasita en tu pantalla de inicio, como cualquier app.';
     btn.textContent   = 'Instalar';
-  } else if (navegadorInApp() && esAndroid()) {
+  } else if (navegadorInApp() && (esAndroid() || esIOS())) {
     texto.textContent = 'Podés seguir usándola acá, o tenerla en tu pantalla de inicio.';
     btn.textContent   = 'Instalar';
   } else if (navegadorInApp()) {
@@ -3478,9 +3492,12 @@ function clickInstalarApp() {
   if (esStandalone()) { showToast('Tasita ya está instalada en tu celular'); return; }
   const app = navegadorInApp();
   if (app) {
-    // Android puede saltar solo a Chrome; iPhone no tiene forma, se explica.
-    if (esAndroid()) { saltarAChrome(); avisarSiNoSalto(app); return; }
-    abrirInstruccionesInApp(app);
+    // Se intenta salir al navegador de verdad: en Android casi siempre prende,
+    // en iPhone es a suerte. Los dos casos caen en las instrucciones si falla.
+    if (esAndroid()) saltarAChrome();
+    else if (esIOS()) saltarASafari();
+    else { abrirInstruccionesInApp(app); return; }
+    avisarSiNoSalto(app);
     return;
   }
   if (deferredInstallPrompt) {
