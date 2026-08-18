@@ -3317,6 +3317,7 @@ let deferredInstallPrompt = null;
 const esStandalone = () =>
   window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 const esIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent);
+const esAndroid = () => /Android/i.test(navigator.userAgent);
 
 // ── Instagram, Facebook y compañía abren los links en un navegador propio,
 //    metido adentro de la app. Desde ahí NO se puede instalar nada, ni en
@@ -3331,10 +3332,36 @@ function navegadorInApp() {
   return null;
 }
 
+// ── Salto a Chrome. Adentro del navegador de Instagram y compañía, Android
+//    nunca ofrece instalar la app. Esta dirección especial abre Chrome de
+//    verdad, que sí la puede instalar. Si Chrome no está en el celular,
+//    browser_fallback_url vuelve a abrir la app como si nada.
+//    En iPhone no existe equivalente: ahí hay que explicar los pasos a mano.
+function urlChrome() {
+  return 'intent://' + location.host + location.pathname +
+         '#Intent;scheme=' + location.protocol.replace(':','') +
+         ';package=com.android.chrome' +
+         ';S.browser_fallback_url=' + encodeURIComponent(location.href) + ';end';
+}
+
+function saltarAChrome() {
+  window.location.href = urlChrome();
+}
+
+// Si el salto no prende (Chrome deshabilitado, o el navegador lo bloquea) no
+// pasa nada visible y la persona queda mirando la pantalla sin entender. A
+// segundo y medio, si seguimos acá, se le explican los pasos a mano.
+function avisarSiNoSalto(app) {
+  setTimeout(() => {
+    if (document.visibilityState === 'visible') abrirInstruccionesInApp(app);
+  }, 1500);
+}
+
 function actualizarInstalarRow() {
   const sub = document.getElementById('instalar-sublabel');
   if (!sub) return;
   if (esStandalone()) sub.textContent = 'Ya instalada ✓';
+  else if (navegadorInApp() && esAndroid()) sub.textContent = 'Tocá para abrirla en Chrome e instalarla';
   else if (navegadorInApp()) sub.textContent = 'Abrila en tu navegador para instalarla';
   else if (deferredInstallPrompt) sub.textContent = 'Tocá para instalar en tu celular';
   else if (esIOS()) sub.textContent = 'Tocá Compartir 📤 → Agregar a inicio';
@@ -3384,6 +3411,9 @@ function mostrarAvisoInstalarSiHaceFalta() {
 
   if (deferredInstallPrompt) {
     texto.textContent = 'Tené Tasita en tu pantalla de inicio, como cualquier app.';
+    btn.textContent   = 'Instalar';
+  } else if (navegadorInApp() && esAndroid()) {
+    texto.textContent = 'Podés seguir usándola acá, o tenerla en tu pantalla de inicio.';
     btn.textContent   = 'Instalar';
   } else if (navegadorInApp()) {
     texto.textContent = 'Para tenerla en tu pantalla de inicio hay que abrirla en tu navegador.';
@@ -3447,7 +3477,12 @@ function copiarAlaAntigua(texto, listo) {
 function clickInstalarApp() {
   if (esStandalone()) { showToast('Tasita ya está instalada en tu celular'); return; }
   const app = navegadorInApp();
-  if (app) { abrirInstruccionesInApp(app); return; }
+  if (app) {
+    // Android puede saltar solo a Chrome; iPhone no tiene forma, se explica.
+    if (esAndroid()) { saltarAChrome(); avisarSiNoSalto(app); return; }
+    abrirInstruccionesInApp(app);
+    return;
+  }
   if (deferredInstallPrompt) {
     deferredInstallPrompt.prompt();
     deferredInstallPrompt.userChoice.finally(() => {
