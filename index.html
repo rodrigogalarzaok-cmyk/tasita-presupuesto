@@ -3679,7 +3679,10 @@ function abrirInstruccionesInApp(app) {
     (esIOS()
       ? `3. Ya en Safari: tocá Compartir 📤 y después "Agregar a inicio"\n\n`
       : `3. Ahí te va a aparecer el cartel para instalarla\n\n`) +
-    `Si no encontrás esa opción, copiá el link acá abajo y pegalo en ${navegador}.`;
+    // Acá va "tu buscador" y no el nombre del navegador: los pasos 1-3 sí
+    // nombran Safari/Chrome porque es lo que dice el menú de Instagram, pero
+    // para pegar el link cada uno usa el que quiere, no el que trae el celular.
+    `Si no encontrás esa opción, copiá el link acá abajo y pegalo en tu buscador.`;
   document.getElementById('instalar-msg').textContent = '';
   document.getElementById('instalar-overlay').classList.add('open');
 }
@@ -3688,7 +3691,7 @@ function copiarLinkApp() {
   const url = 'https://presupuesto.tasita.com.ar';
   const listo = () => {
     document.getElementById('instalar-msg').textContent =
-      '¡Link copiado! Pegalo en ' + (esIOS() ? 'Safari' : 'Chrome') + '.';
+      '¡Link copiado! Pegalo en tu buscador.';
   };
   if (navigator.clipboard) {
     navigator.clipboard.writeText(url).then(listo).catch(() => copiarAlaAntigua(url, listo));
