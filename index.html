@@ -1171,6 +1171,23 @@
     </div>
     <!-- Solo aparece con el cobro prendido: hasta entonces es una tripa del sistema
          que al usuario no le dice nada. El código se genera y funciona igual. -->
+    <!-- Copia de seguridad: si el guardado en la base falla, la persona tiene
+         que enterarse. Antes fallaba en silencio y el respaldo quedaba viejo
+         sin que nadie lo supiera. -->
+    <div class="section" style="margin-top:8px" id="sync-section">
+      <div class="card" style="padding:0">
+        <div class="modal-row" style="padding:14px 20px" onclick="reintentarSync()">
+          <div class="modal-row-left">
+            <div class="modal-row-icon">☁️</div>
+            <div>
+              <div style="font-weight:600;font-size:15px">Copia de seguridad</div>
+              <div id="sync-estado-label" style="font-size:12px;color:var(--text3);margin-top:2px;line-height:1.45"></div>
+            </div>
+          </div>
+          <div style="color:var(--text3);font-size:13px">↻</div>
+        </div>
+      </div>
+    </div>
     <div class="section" style="margin-top:8px" id="codigo-section">
       <div class="card" style="padding:0">
         <div class="modal-row" style="padding:14px 20px" onclick="copiarCodigo()">
@@ -3320,8 +3337,75 @@ function actualizarSubUI() {
 // ════════════════════════════════════════
 const VER_KEY      = 'tasita_ver';       // última versión del servidor que vimos
 const BORRADOS_KEY = 'tasita_borrados';  // ids borrados, para que no revivan al sincronizar
-const MAX_BORRADOS = 500;
+// Tope de lápidas. Si alguien borra más que esto a lo largo de los años, las
+// más viejas se caen de la lista y podrían revivir desde un celular que estuvo
+// mucho tiempo apagado. 2000 son ~44 KB: barato, y cubre años de uso normal.
+const MAX_BORRADOS = 2000;
 const ESPERA_SYNC  = 4000;               // junta varios cambios seguidos en una sola escritura
+
+// ── Estado de la copia de seguridad.
+//    La app funciona con localStorage, así que un fallo al guardar en la base
+//    no se nota: la pantalla sigue perfecta mientras el respaldo envejece.
+//    En un producto pago eso no puede pasar en silencio.
+const SYNC_OK_KEY  = 'tasita_sync_ok';   // cuándo se guardó bien por última vez
+const SYNC_ERR_KEY = 'tasita_sync_err';  // motivo del último fallo, si quedó pendiente
+
+const MOTIVOS_SYNC = {
+  red:      'Sin conexión. Se guarda sola cuando vuelva internet.',
+  servidor: 'No pudimos guardarla. Se reintenta al abrir la app.',
+  grande:   'Tus datos llegaron al tamaño máximo. Escribinos por Instagram.'
+};
+
+function marcarSyncOk() {
+  localStorage.setItem(SYNC_OK_KEY, String(Date.now()));
+  localStorage.removeItem(SYNC_ERR_KEY);
+  actualizarSyncUI();
+}
+
+function marcarSyncError(motivo) {
+  localStorage.setItem(SYNC_ERR_KEY, motivo);
+  actualizarSyncUI();
+}
+
+function haceCuanto(ts) {
+  const min = Math.floor((Date.now() - ts) / 60000);
+  if (min < 2)    return 'recién';
+  if (min < 60)   return `hace ${min} minutos`;
+  const hs = Math.floor(min / 60);
+  if (hs < 24)    return `hace ${hs} ${hs === 1 ? 'hora' : 'horas'}`;
+  const dias = Math.floor(hs / 24);
+  return `hace ${dias} ${dias === 1 ? 'día' : 'días'}`;
+}
+
+function actualizarSyncUI() {
+  const lbl = document.getElementById('sync-estado-label');
+  if (!lbl) return;
+  const sec = document.getElementById('sync-section');
+  if (!PAGOS.API_URL) { if (sec) sec.style.display = 'none'; return; }
+
+  const err = localStorage.getItem(SYNC_ERR_KEY);
+  const ok  = parseInt(localStorage.getItem(SYNC_OK_KEY) || '', 10);
+
+  if (err) {
+    lbl.style.color = '#e0a355';
+    lbl.textContent = (ok ? `Última copia ${haceCuanto(ok)}. ` : '') + (MOTIVOS_SYNC[err] || MOTIVOS_SYNC.servidor);
+  } else if (ok) {
+    lbl.style.color = '';
+    lbl.textContent = `Al día · guardada ${haceCuanto(ok)}`;
+  } else {
+    lbl.style.color = '';
+    lbl.textContent = 'Se guarda sola al cargar tu primer movimiento';
+  }
+}
+
+// Tocar la fila fuerza un intento ahora mismo, sin esperar al próximo arranque.
+async function reintentarSync() {
+  if (!PAGOS.API_URL) return;
+  const lbl = document.getElementById('sync-estado-label');
+  if (lbl) { lbl.style.color = ''; lbl.textContent = 'Guardando…'; }
+  await sincronizar();
+  actualizarSyncUI();
+}
 
 let idsConocidos = null;   // ids que había en el último guardado (para detectar borrados)
 let syncTimer    = null;
@@ -3395,9 +3479,16 @@ async function subirDatos(reintento) {
     if (r.ok) {
       const res = await r.json();
       if (res.version) localStorage.setItem(VER_KEY, String(res.version));
+      marcarSyncOk();
+    } else if (r.status === 413) {
+      // Tope de tamaño del servidor. No se arregla solo reintentando.
+      marcarSyncError('grande');
+    } else {
+      marcarSyncError('servidor');
     }
   } catch (e) {
     // Sin internet: queda pendiente y se sube en el próximo arranque.
+    marcarSyncError('red');
   } finally {
     subiendo = false;
   }
@@ -3434,11 +3525,11 @@ async function sincronizar() {
       `${PAGOS.API_URL}/datos?codigo=${encodeURIComponent(miCodigo())}&version=${ver}`,
       { cache: 'no-store' }
     );
-    if (!r.ok) return;
+    if (!r.ok) { marcarSyncError('servidor'); return; }
     const res = await r.json();
 
     // Nada cambió del otro lado: no se descarga nada y no se sube nada.
-    if (res.sinCambios) { localStorage.setItem(VER_KEY, String(res.version)); return; }
+    if (res.sinCambios) { localStorage.setItem(VER_KEY, String(res.version)); marcarSyncOk(); return; }
 
     aplicarRemoto(res);
 
@@ -3447,9 +3538,12 @@ async function sincronizar() {
     // escritura, y quien no tocó nada gastaría otra en cada arranque.
     const contenido = JSON.stringify({ txs: transactions, borrados: leerBorrados() });
     const nadaQueGuardar = transactions.length === 0 && leerBorrados().length === 0;
-    if (!nadaQueGuardar && contenido !== (res.contenido || '')) await subirDatos();
+    if (nadaQueGuardar) { /* todavía no hay nada para respaldar */ }
+    else if (contenido !== (res.contenido || '')) await subirDatos();
+    else marcarSyncOk();   // ya estaba todo guardado
   } catch (e) {
     // Sin internet: la app sigue andando con lo que tiene guardado.
+    marcarSyncError('red');
   }
 }
 
@@ -3476,6 +3570,7 @@ miCodigo();      // genera el código anónimo la primera vez
 // vez que la abre con el cobro prendido. Quien es nuevo, al guardar su nombre.
 arrancarPruebaSiCorresponde();
 actualizarSubUI();
+actualizarSyncUI();
 aplicarPaywall();
 // Revalida contra el servidor en segundo plano (si no hay base conectada, no hace nada)
 verificarSuscripcion().then(() => { actualizarSubUI(); aplicarPaywall(); });
