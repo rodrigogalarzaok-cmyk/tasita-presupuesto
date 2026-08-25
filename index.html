@@ -709,6 +709,23 @@
     }
     .welcome-btn:active { transform: scale(0.96); }
     .welcome-btn.disabled { opacity: 0.35; pointer-events: none; }
+    /* salida discreta del paso de instalación: instalar es lo importante,
+       pero nadie tiene que quedar encerrado si no puede hacerlo */
+    .welcome-link {
+      margin-top: 14px; text-align: center; font-size: 12.5px;
+      color: var(--text3); cursor: pointer; text-decoration: underline;
+    }
+    .welcome-pasos { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+    .welcome-paso {
+      display: flex; align-items: flex-start; gap: 10px; text-align: left;
+      font-size: 13px; color: var(--text2); line-height: 1.45;
+    }
+    .welcome-paso span {
+      flex: none; width: 20px; height: 20px; border-radius: 50%;
+      background: rgba(77,184,255,0.16); color: #4DB8FF;
+      font-size: 11px; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+    }
     [data-theme="light"] .welcome-card {
       background: linear-gradient(160deg,#ffffff,#eaf4fd);
       border-top: 1px solid rgba(77,184,255,0.35);
@@ -1317,7 +1334,38 @@
 
   <!-- ══════════════════ WELCOME MODAL ══════════════════ -->
   <div class="welcome-overlay" id="welcome-overlay">
-    <div class="welcome-card">
+
+    <!-- Paso 1: instalar. Va antes del nombre a propósito: si alguien escribe
+         su nombre en el navegador de Instagram y recién después instala, la app
+         instalada arranca con la memoria vacía y se lo vuelve a pedir todo.
+         Al revés no se pierde nada. Se saltea si ya está instalada o si el
+         navegador no ofrece ningún camino para instalar. -->
+    <div class="welcome-card" id="welcome-card-instalar" style="display:none">
+      <div class="welcome-logo">
+        <div class="logo-icon" style="width:52px;height:52px">
+          <svg viewBox="0 0 100 100" width="34" height="34" xmlns="http://www.w3.org/2000/svg">
+            <path d="M38 18 Q35 12 38 7" stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <path d="M50 18 Q47 12 50 7" stroke="white" stroke-width="4" fill="none" stroke-linecap="round"/>
+            <path d="M18 28 Q18 82 50 82 Q82 82 82 28 Z" fill="white"/>
+            <path d="M82 38 Q96 38 96 55 Q96 72 82 72" stroke="white" stroke-width="8" fill="none" stroke-linecap="round"/>
+            <path d="M24 34 Q24 76 50 76 Q76 76 76 34 Z" fill="#030d19"/>
+            <rect x="32" y="58" width="10" height="14" rx="2" fill="#00e5ff"/>
+            <rect x="45" y="48" width="10" height="24" rx="2" fill="#00e5ff"/>
+            <rect x="58" y="38" width="10" height="34" rx="2" fill="#00e5ff"/>
+          </svg>
+        </div>
+      </div>
+      <div class="welcome-title">¡Bienvenido a Tasita!</div>
+      <div class="welcome-sub" id="welcome-inst-sub"></div>
+      <div class="welcome-pasos" id="welcome-inst-pasos" style="display:none"></div>
+      <div class="welcome-btn" id="welcome-inst-btn" onclick="accionInstalarWelcome()"></div>
+      <div class="welcome-link" id="welcome-inst-saltar" onclick="pasoNombreWelcome()">
+        Seguir en el navegador por ahora
+      </div>
+    </div>
+
+    <!-- Paso 2: nombre -->
+    <div class="welcome-card" id="welcome-card-nombre">
       <div class="welcome-logo">
         <div class="logo-icon" style="width:52px;height:52px">
           <svg viewBox="0 0 100 100" width="34" height="34" xmlns="http://www.w3.org/2000/svg">
@@ -2827,9 +2875,108 @@ function clearData() {
 // ════════════════════════════════════════
 //  WELCOME MODAL
 // ════════════════════════════════════════
+// Qué camino de instalación tiene esta persona. Devuelve null cuando no hay
+// ninguno (ya la tiene instalada, o es una compu sin instalación posible): en
+// ese caso el welcome arranca directo en el nombre, sin trabas inútiles.
+function planInstalarWelcome() {
+  if (esStandalone()) return null;
+  const app = navegadorInApp();
+
+  if (deferredInstallPrompt) return {
+    sub: 'Antes de empezar, tenela en tu pantalla de inicio como cualquier app.',
+    btn: 'Instalar Tasita', accion: 'prompt'
+  };
+  if (app && esAndroid()) return {
+    sub: `Estás viendo Tasita dentro de ${app}, y desde acá el celular no deja instalarla. Te llevamos a Chrome.`,
+    btn: 'Instalar Tasita', accion: 'chrome'
+  };
+  if (app && esIOS()) return {
+    sub: `Estás viendo Tasita dentro de ${app}, y desde acá el iPhone no deja instalarla. Hay que abrirla en Safari.`,
+    btn: 'Abrir en Safari', accion: 'safari'
+  };
+  if (app) return {
+    sub: `Estás viendo Tasita dentro de ${app}. Para tenerla en tu pantalla de inicio hay que abrirla en tu navegador.`,
+    btn: 'Cómo instalarla', accion: 'instrucciones'
+  };
+  // Android en un navegador de verdad, pero Chrome todavía no avisó que se
+  // puede instalar (suele tardar un segundo, y a veces no avisa nunca porque
+  // ya mostró su cartel antes). Se arranca con los pasos a mano; si el aviso
+  // llega, beforeinstallprompt redibuja esta tarjeta con el botón de un toque.
+  if (esAndroid()) return {
+    sub: 'Antes de empezar, tenela en tu pantalla de inicio como cualquier app.',
+    pasos: ['Tocá los ⋮ arriba a la derecha',
+            'Elegí "Instalar app" o "Agregar a pantalla de inicio"',
+            'Abrí Tasita desde tu pantalla de inicio'],
+    btn: 'Listo, ya la instalé', accion: 'seguir'
+  };
+  // iPhone en Safari: Apple no permite instalar desde un botón. Lo único
+  // honesto es mostrar los pasos y que la persona los haga.
+  if (esIOS()) return {
+    sub: 'Antes de empezar, tenela en tu pantalla de inicio como cualquier app.',
+    pasos: ['Tocá Compartir 📤 (abajo, en la barra de Safari)',
+            'Bajá y elegí "Agregar a inicio"',
+            'Abrí Tasita desde tu pantalla de inicio'],
+    btn: 'Listo, ya la agregué', accion: 'seguir'
+  };
+  return null;
+}
+
+let planWelcome = null;
+
 function openWelcome() {
+  planWelcome = planInstalarWelcome();
+  if (planWelcome) pasoInstalarWelcome();
+  else             pasoNombreWelcome();
   document.getElementById('welcome-overlay').classList.add('open');
+}
+
+function pasoInstalarWelcome() {
+  const p = planWelcome;
+  if (!p) { pasoNombreWelcome(); return; }
+  document.getElementById('welcome-inst-sub').textContent = p.sub;
+
+  const pasos = document.getElementById('welcome-inst-pasos');
+  if (p.pasos) {
+    pasos.innerHTML = p.pasos.map((t, i) => `<div class="welcome-paso"><span>${i + 1}</span>${t}</div>`).join('');
+    pasos.style.display = '';
+  } else {
+    pasos.style.display = 'none';
+  }
+
+  document.getElementById('welcome-inst-btn').textContent = p.btn;
+  // cuando el botón principal ya es "seguir", el renglón de abajo sobra
+  document.getElementById('welcome-inst-saltar').style.display = p.accion === 'seguir' ? 'none' : '';
+  document.getElementById('welcome-card-instalar').style.display = '';
+  document.getElementById('welcome-card-nombre').style.display   = 'none';
+}
+
+function pasoNombreWelcome() {
+  document.getElementById('welcome-card-instalar').style.display = 'none';
+  document.getElementById('welcome-card-nombre').style.display   = '';
   setTimeout(() => document.getElementById('welcome-name-input').focus(), 350);
+}
+
+function accionInstalarWelcome() {
+  const p = planWelcome;
+  if (!p) { pasoNombreWelcome(); return; }
+  const app = navegadorInApp();
+
+  if (p.accion === 'seguir')        { pasoNombreWelcome(); return; }
+  if (p.accion === 'instrucciones') { abrirInstruccionesInApp(app); return; }
+  // El salto a Chrome/Safari puede no prender; avisarSiNoSalto muestra los
+  // pasos a mano a segundo y medio si seguimos acá.
+  if (p.accion === 'chrome')        { saltarAChrome(); avisarSiNoSalto(app); return; }
+  if (p.accion === 'safari')        { saltarASafari(); avisarSiNoSalto(app); return; }
+
+  if (p.accion === 'prompt' && deferredInstallPrompt) {
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt.userChoice.finally(() => {
+      deferredInstallPrompt = null;
+      actualizarInstalarRow();
+      mostrarAvisoInstalarSiHaceFalta();
+      pasoNombreWelcome();   // haya instalado o no, no se la deja trabada acá
+    });
+  }
 }
 function onWelcomeInput() {
   const val = document.getElementById('welcome-name-input').value.trim();
@@ -2854,8 +3001,8 @@ function openCambiarNombre() {
   const input = document.getElementById('welcome-name-input');
   input.value = nombre;
   document.getElementById('welcome-btn').classList.toggle('disabled', nombre.length === 0);
+  pasoNombreWelcome();   // cambiar el nombre nunca pasa por el paso de instalar
   document.getElementById('welcome-overlay').classList.add('open');
-  setTimeout(() => input.focus(), 350);
 }
 
 // ════════════════════════════════════════
@@ -3302,8 +3449,8 @@ const mesLabel = mesCorto.charAt(0).toUpperCase() + mesCorto.slice(1);
 const elChart  = document.getElementById('mes-label-chart');
 if (elChart) elChart.textContent = mesLabel;
 
-// Mostrar welcome solo si no hay nombre guardado
-if (!localStorage.getItem('tasita_nombre')) openWelcome();
+// El welcome se abre al final del archivo: ahora arranca por el paso de
+// instalación y necesita esStandalone/navegadorInApp, que se definen más abajo.
 
 // PWA: registrar service worker (offline + instalable)
 if ('serviceWorker' in navigator) {
@@ -3385,17 +3532,28 @@ function actualizarInstalarRow() {
 // Chrome avisa que la app se puede instalar (a veces recién unos segundos
 // después de abrirla), así que el aviso de la pantalla principal se vuelve a
 // dibujar acá: es el único momento en que aparece el botón de un toque.
+// ¿Está abierto el paso de instalación del welcome en este momento?
+function enPasoInstalar() {
+  const c = document.getElementById('welcome-card-instalar');
+  const o = document.getElementById('welcome-overlay');
+  return !!c && !!o && o.classList.contains('open') && c.style.display !== 'none';
+}
+
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredInstallPrompt = e;
   actualizarInstalarRow();
   mostrarAvisoInstalarSiHaceFalta();
+  // Chrome a veces avisa unos segundos después de abrir la app: si el welcome
+  // ya está en pantalla, se redibuja para pasar al botón de un solo toque.
+  if (enPasoInstalar()) { planWelcome = planInstalarWelcome(); pasoInstalarWelcome(); }
 });
 
 window.addEventListener('appinstalled', () => {
   deferredInstallPrompt = null;
   actualizarInstalarRow();
   mostrarAvisoInstalarSiHaceFalta();
+  if (enPasoInstalar()) pasoNombreWelcome();   // ya está instalada, seguí
 });
 
 function cerrarInstalar() {
@@ -3518,6 +3676,9 @@ function clickInstalarApp() {
 
 actualizarInstalarRow();
 mostrarAvisoInstalarSiHaceFalta();
+
+// Welcome de quien entra por primera vez: primero instalar, después el nombre.
+if (!localStorage.getItem('tasita_nombre')) openWelcome();
 </script>
 </body>
 </html>
