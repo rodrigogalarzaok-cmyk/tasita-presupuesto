@@ -3001,6 +3001,9 @@ function confirmWelcome() {
   localStorage.setItem('tasita_nombre', nombre);
   document.getElementById('welcome-overlay').classList.remove('open');
   actualizarSaludo();
+  // Recién acá arrancan sus días de prueba: este es el momento en que entró.
+  arrancarPruebaSiCorresponde();
+  actualizarSubUI();
 }
 function actualizarSaludo() {
   const nombre = localStorage.getItem('tasita_nombre');
@@ -3059,16 +3062,32 @@ function miCodigo() {
   return id;
 }
 
+// Solo lee. Devuelve null si la prueba todavía no arrancó.
 function inicioPrueba() {
-  let t = parseInt(localStorage.getItem(INICIO_KEY) || '', 10);
-  if (!t || isNaN(t)) {
-    t = Date.now();
-    // Mientras el cobro esté apagado NO se guarda: si se guardara, los usuarios
-    // de la beta llegarían con la prueba ya vencida el día que se prenda el cobro.
-    // Así, cada uno arranca sus días la primera vez que abre la app ya cobrando.
-    if (PAGOS.COBRO_ACTIVO) localStorage.setItem(INICIO_KEY, String(t));
-  }
-  return t;
+  const t = parseInt(localStorage.getItem(INICIO_KEY) || '', 10);
+  return (!t || isNaN(t)) ? null : t;
+}
+
+// ── Cuándo arrancan los días de prueba de cada persona.
+//
+//    NO alcanza con abrir la app: alguien puede entrar, distraerse y cerrarla
+//    sin haber llegado a usarla. Si el reloj arrancara ahí, volvería tres
+//    semanas después y se encontraría con la prueba vencida sin haber cargado
+//    un solo movimiento. El reloj arranca cuando guardó su nombre, que es el
+//    momento en que de verdad entró a Tasita.
+//
+//    Tampoco corre mientras el cobro está apagado: si se guardara la fecha
+//    durante la beta, el día que se prenda el cobro toda esa gente aparecería
+//    con la prueba ya vencida y quedaría bloqueada de golpe. Por eso los que ya
+//    tienen nombre de la beta arrancan sus 20 días recién ese día.
+//
+//    Cada persona tiene los suyos: quien entre dentro de un mes va a tener sus
+//    20 días completos contados desde ese día, no desde el lanzamiento.
+function arrancarPruebaSiCorresponde() {
+  if (!PAGOS.COBRO_ACTIVO) return;                          // en beta no corre
+  if (!localStorage.getItem('tasita_nombre')) return;       // todavía no entró
+  if (localStorage.getItem(INICIO_KEY)) return;             // ya había arrancado
+  localStorage.setItem(INICIO_KEY, String(Date.now()));
 }
 
 // ── Estado actual: 'activa' (pagó) | 'prueba' (le quedan días) | 'vencida'
@@ -3079,7 +3098,11 @@ function estadoSuscripcion() {
     const hoy = todayISO();
     if (cache.hasta >= hoy) return { estado: 'activa', hasta: cache.hasta };
   }
-  const diasPasados = Math.floor((Date.now() - inicioPrueba()) / 86400000);
+  // Todavía no arrancó (no puso el nombre, o seguimos en beta): prueba entera.
+  const inicio = inicioPrueba();
+  if (inicio === null) return { estado: 'prueba', diasRestantes: PAGOS.DIAS_PRUEBA };
+
+  const diasPasados = Math.floor((Date.now() - inicio) / 86400000);
   const restantes = PAGOS.DIAS_PRUEBA - diasPasados;
   if (restantes > 0) return { estado: 'prueba', diasRestantes: restantes };
   return { estado: 'vencida' };
@@ -3449,6 +3472,9 @@ renderHome();
 updateFechaLabel();
 actualizarSaludo();
 miCodigo();      // genera el código anónimo la primera vez
+// Quien ya venía usando la app desde la beta arranca sus días acá, la primera
+// vez que la abre con el cobro prendido. Quien es nuevo, al guardar su nombre.
+arrancarPruebaSiCorresponde();
 actualizarSubUI();
 aplicarPaywall();
 // Revalida contra el servidor en segundo plano (si no hay base conectada, no hace nada)
