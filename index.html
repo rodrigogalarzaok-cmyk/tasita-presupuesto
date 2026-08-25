@@ -3673,7 +3673,6 @@ function abrirInstruccionesInApp(app) {
   const navegador = esIOS() ? 'Safari' : 'Chrome';
   const puntos    = esIOS() ? '•••' : '⋮';
   document.getElementById('instalar-texto').textContent =
-    `Estás viendo Tasita dentro de ${app}, y desde acá el celular no deja instalarla.\n\n` +
     `1. Tocá los ${puntos} arriba a la derecha\n` +
     `2. Elegí "Abrir en ${navegador}" (o "Abrir en el navegador")\n` +
     (esIOS()

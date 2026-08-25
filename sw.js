@@ -1,4 +1,4 @@
-const CACHE_NAME = 'tasita-v21';
+const CACHE_NAME = 'tasita-v22';
 const CORE_ASSETS = [
   './',
   './index.html',
