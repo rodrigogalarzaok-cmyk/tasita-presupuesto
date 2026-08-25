@@ -2883,7 +2883,9 @@ function planInstalarWelcome() {
   const app = navegadorInApp();
 
   if (deferredInstallPrompt) return {
-    sub: 'Antes de empezar, tenela en tu pantalla de inicio como cualquier app.',
+    sub: esAndroid() || esIOS()
+      ? 'Antes de empezar, tenela en tu pantalla de inicio como cualquier app.'
+      : 'Antes de empezar, tenela en tu escritorio como cualquier programa.',
     btn: 'Instalar Tasita', accion: 'prompt'
   };
   if (app && esAndroid()) return {
@@ -2917,6 +2919,17 @@ function planInstalarWelcome() {
             'Bajá y elegí "Agregar a inicio"',
             'Abrí Tasita desde tu pantalla de inicio'],
     btn: 'Listo, ya la agregué', accion: 'seguir'
+  };
+  // Compu con Chrome, Edge, Brave u Opera: también se puede instalar y queda
+  // como un programa más, con su propia ventana. Mismo esquema que Android:
+  // pasos a mano, y si el navegador avisa, esto se vuelve un botón de un toque.
+  // Firefox y Safari de escritorio no instalan nada: a esos no se les muestra.
+  if (/Chrome|Chromium|Edg|OPR/i.test(navigator.userAgent || '')) return {
+    sub: 'Antes de empezar, tenela en tu escritorio como cualquier programa.',
+    pasos: ['Mirá el final de la barra de direcciones, arriba',
+            'Tocá el ícono de instalar (una pantallita con una flecha ↓)',
+            'Confirmá "Instalar"'],
+    btn: 'Listo, ya la instalé', accion: 'seguir'
   };
   return null;
 }
