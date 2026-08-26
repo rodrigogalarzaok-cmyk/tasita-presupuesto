@@ -3159,7 +3159,7 @@ function openSuscripcion() {
     document.getElementById('paywall-sub').textContent   = 'Gracias por bancar Tasita 💙 Renovación: ' + fechaLinda(s.hasta);
   } else if (s.estado === 'prueba') {
     document.getElementById('paywall-title').textContent = 'Estás en prueba gratis';
-    document.getElementById('paywall-sub').textContent   = `Te ${s.diasRestantes === 1 ? 'queda' : 'quedan'} ${s.diasRestantes} ${s.diasRestantes === 1 ? 'día' : 'días'}. Podés suscribirte cuando quieras.`;
+    document.getElementById('paywall-sub').textContent   = 'Podés suscribirte cuando quieras.';
   } else {
     document.getElementById('paywall-title').textContent = 'Tu prueba terminó';
     document.getElementById('paywall-sub').textContent   = 'Seguí usando Tasita con todos tus datos intactos.';
@@ -3298,7 +3298,9 @@ function actualizarSubUI() {
     const s = estadoSuscripcion();
     if (!PAGOS.COBRO_ACTIVO)          lbl.textContent = 'Gratis mientras estamos en beta';
     else if (s.estado === 'activa')   lbl.textContent = 'Activa hasta ' + fechaLinda(s.hasta);
-    else if (s.estado === 'prueba')   lbl.textContent = `Prueba gratis · ${s.diasRestantes} ${s.diasRestantes === 1 ? 'día' : 'días'}`;
+    // Sin cuenta regresiva: no se le recuerda a nadie que la prueba se termina.
+    // El único momento en que se habla de plata es el día 20 (ver aplicarPaywall).
+    else if (s.estado === 'prueba')   lbl.textContent = 'Prueba gratis';
     else                              lbl.textContent = 'Vencida — tocá para suscribirte';
   }
   const precio = document.getElementById('paywall-precio');
