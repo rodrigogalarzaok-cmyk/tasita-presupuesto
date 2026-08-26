@@ -3027,9 +3027,9 @@ function openCambiarNombre() {
 //  ⚙️ ÚNICO LUGAR PARA TOCAR AL LANZAR EL COBRO:
 // ════════════════════════════════════════
 const PAGOS = {
-  // Poner en true recién cuando el link de Mercado Pago esté creado y probado.
-  // Mientras esté en false la app funciona gratis para todos, como hasta ahora.
-  COBRO_ACTIVO: false,
+  // Prendido el 2026-08-25, al lanzar la app. Cada persona tiene sus DIAS_PRUEBA
+  // gratis contados desde que guarda su nombre, y después pasa por el paywall.
+  COBRO_ACTIVO: true,
 
   // Precio mensual (solo se muestra en pantalla; el cobro real lo define el plan de MP)
   PRECIO: 4999,
