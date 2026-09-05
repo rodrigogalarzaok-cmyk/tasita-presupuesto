@@ -1417,7 +1417,7 @@
 
       <div style="background:rgba(77,184,255,0.08);border:1px solid rgba(77,184,255,0.22);border-radius:16px;padding:16px 18px;margin-bottom:18px">
         <div style="display:flex;align-items:baseline;justify-content:center;gap:6px;margin-bottom:12px">
-          <span style="font-size:30px;font-weight:800;color:var(--accent);letter-spacing:-1px" id="paywall-precio">$3.500</span>
+          <span style="font-size:30px;font-weight:800;color:var(--accent);letter-spacing:-1px" id="paywall-precio">$3.999</span>
           <span style="font-size:13px;color:var(--text3)">/ mes</span>
         </div>
         <div style="font-size:13px;color:var(--text2);line-height:1.9">
@@ -3032,14 +3032,16 @@ const PAGOS = {
   COBRO_ACTIVO: true,
 
   // Precio mensual (solo se muestra en pantalla; el cobro real lo define el plan de MP)
-  PRECIO: 4999,
+  PRECIO: 3999,
 
   // Días de prueba gratis. El contador es de CADA persona por separado y
   // arranca la primera vez que abre la app en su celular, no en una fecha fija.
   // Así, alguien que la instala dentro de seis meses igual tiene sus 20 días.
   DIAS_PRUEBA: 20,
 
-  // Link del plan de suscripción de Mercado Pago ($4.999/mes, creado 2026-08-12).
+  // Link del plan de suscripción de Mercado Pago (creado 2026-08-12; el monto se
+  // bajó de $4.999 a $3.999 el 2026-09-04 editando el plan, así que el link no
+  // cambió: adentro solo lleva el id del plan, el precio lo pone MP al abrirlo).
   // No sirve agregarle parámetros: el link corto los descarta y el checkout del
   // plan no acepta external_reference. A quien paga se lo reconoce por su email.
   LINK_MP: 'https://mpago.la/2sBp5gh',
