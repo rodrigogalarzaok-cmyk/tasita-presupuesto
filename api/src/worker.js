@@ -12,6 +12,11 @@
 
 const DIAS_GRACIA = 3; // margen por si MP se demora en cobrar la renovación
 
+// Estados en los que la plata volvió al bolsillo de la persona. Son los únicos
+// que cortan el acceso en el acto: en todos los demás casos (canceló, se pausó,
+// falló un cobro) el mes ya pagado se respeta hasta el final.
+const DEVUELTO = ['charged_back', 'refunded', 'cancelled_by_chargeback'];
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -209,13 +214,14 @@ async function registrarEmail(request, env) {
 // Deja la suscripción paga y vigente. Nunca acorta una vigencia ya dada.
 async function activarSuscripcion(env, codigo, hasta, mpId, email) {
   await env.DB.prepare(`
-    INSERT INTO suscripciones (codigo, activa, hasta, email, mp_id, actualizado)
-    VALUES (?, 1, ?, ?, ?, ?)
+    INSERT INTO suscripciones (codigo, activa, hasta, email, mp_id, estado, actualizado)
+    VALUES (?, 1, ?, ?, ?, 'al dia', ?)
     ON CONFLICT(codigo) DO UPDATE SET
       activa      = 1,
       hasta       = MAX(COALESCE(suscripciones.hasta, ''), COALESCE(excluded.hasta, '')),
       email       = COALESCE(excluded.email, suscripciones.email),
       mp_id       = excluded.mp_id,
+      estado      = 'al dia',
       actualizado = excluded.actualizado
   `).bind(codigo, hasta, email || null, mpId || null, new Date().toISOString()).run();
 }
@@ -272,10 +278,23 @@ async function webhookMP(request, url, env) {
   if (codigo) {
     if (paga && hasta) {
       await activarSuscripcion(env, codigo, hasta, mpId, email);
+    } else if (DEVUELTO.includes(estado)) {
+      // Le devolvieron la plata (contracargo o reembolso): ese mes ya no está
+      // pagado, así que el acceso se corta en el momento.
+      await env.DB.prepare(
+        'UPDATE suscripciones SET activa = 0, estado = ?, actualizado = ? WHERE codigo = ?'
+      ).bind(estado || 'devuelto', new Date().toISOString(), codigo).run();
     } else {
-      // Cancelada o pausada: se corta el acceso, pero la fila queda.
-      await env.DB.prepare('UPDATE suscripciones SET activa = 0, actualizado = ? WHERE codigo = ?')
-        .bind(new Date().toISOString(), codigo).run();
+      // Canceló, la pausó, o falló un cobro.
+      //
+      // NO se corta el acceso: el mes que pagó le corresponde entero. La fila
+      // queda con su 'hasta' y se vence sola el día que termina lo pagado,
+      // porque al no haber más cobros nada la va a extender. Es lo que hace
+      // cualquier suscripción, y evita el reclamo de quien pagó un mes, canceló
+      // a los dos días y se quedó afuera.
+      await env.DB.prepare(
+        'UPDATE suscripciones SET estado = ?, actualizado = ? WHERE codigo = ?'
+      ).bind(estado || 'sin estado', new Date().toISOString(), codigo).run();
     }
   }
   return responder({ ok: true }, 200, env);
@@ -421,7 +440,12 @@ async function panel(url, env) {
            AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS con_email,
         (SELECT COUNT(*) FROM suscripciones s WHERE s.email IS NOT NULL
            AND (s.activa = 0 OR s.hasta < ${HOY})
-           AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS email_sin_pagar
+           AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS email_sin_pagar,
+        -- Cancelaron pero el mes que pagaron sigue corriendo: son las bajas que
+        -- vienen, y el día que se les vence bajan solas de 'pagando ahora'.
+        (SELECT COUNT(*) FROM suscripciones s WHERE s.activa = 1 AND s.hasta >= ${HOY}
+           AND s.estado IS NOT NULL AND s.estado NOT IN ('al dia')
+           AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS cancelaron
     `),
     env.DB.prepare(`
       SELECT creado AS dia, COUNT(*) AS n FROM usuarios
@@ -650,6 +674,7 @@ function cuerpoPanel(d) {
     ${tarjeta(r.pagando, 'pagando ahora')}
     ${tarjeta(r.email_sin_pagar, 'dejaron el mail sin pagar', 'fueron a pagar y no terminaron')}
     ${tarjeta(r.con_email, 'dejaron el mail en total')}
+    ${r.cancelaron ? tarjeta(r.cancelaron, 'se dieron de baja', 'siguen entrando hasta que se les termine el mes que pagaron') : ''}
   </div>
 
   <h2>Pruebas que se terminan</h2>

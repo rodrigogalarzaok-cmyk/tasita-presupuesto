@@ -68,6 +68,12 @@ servidor — es una línea en `index.html`, todavía sin hacer.
 
 - El webhook **nunca confía en el aviso que llega**: cualquiera puede hacer POST a esa URL,
   así que le vuelve a preguntar a Mercado Pago por el pago usando el token secreto.
+- **Cancelar no corta el acceso.** El mes que la persona pagó le corresponde entero: la
+  suscripción se queda con su `hasta` y se vence sola, porque al no haber más cobros nada
+  la va a extender. Lo mismo con un pago rechazado (MP reintenta). Lo único que corta en el
+  acto es que le hayan devuelto la plata: los estados de `DEVUELTO` en `worker.js`
+  (contracargo o reembolso). El estado que informó MP queda en `suscripciones.estado`, y el
+  panel muestra cuántos se dieron de baja pero siguen entrando hasta que se les termine.
 - Siempre responde `200`, incluso ante un aviso que no puede procesar. Si devolviera error,
   MP reintenta el mismo aviso durante días. Lo que no se pudo procesar queda en `eventos_mp`
   para activarlo a mano.
