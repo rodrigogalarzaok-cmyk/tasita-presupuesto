@@ -3520,6 +3520,25 @@ function revisarPagoAlVolver() {
 // En iPhone volver a una PWA no siempre dispara 'visibilitychange', pero sí 'focus'.
 window.addEventListener('focus', revisarPagoAlVolver);
 
+// ── Recién pagó y Mercado Pago la devolvió a la app.
+//
+//    Desde el 2026-09-04 el plan tiene sitio de redireccionamiento, así que al
+//    terminar de suscribirse MP la manda de vuelta a presupuesto.tasita.com.ar y
+//    la app arranca de cero. El problema: el aviso del pago viaja por otro lado
+//    (el webhook) y puede llegar unos segundos DESPUÉS que la persona. Si se
+//    pregunta una sola vez, justo en ese hueco el servidor todavía contesta que
+//    no pagó y le aparece "Tu prueba terminó" recién salida de pagar.
+//
+//    Por eso se reintenta un rato. Solo para quien está bloqueado Y ya dejó su
+//    email, o sea alguien que efectivamente pasó por el camino de pago: al resto
+//    no le cuesta ni una llamada.
+function esperarElPagoReciente() {
+  if (!PAGOS.COBRO_ACTIVO || tieneAcceso() || !emailGuardado()) return;
+  [3000, 8000, 15000, 30000].forEach((ms) => setTimeout(() => {
+    if (!tieneAcceso()) revisarPagoAlVolver();
+  }, ms));
+}
+
 // ════════════════════════════════════════
 //  INIT
 // ════════════════════════════════════════
@@ -3536,7 +3555,7 @@ arrancarPruebaSiCorresponde();
 actualizarSubUI();
 aplicarPaywall();
 // Revalida contra el servidor en segundo plano (si no hay base conectada, no hace nada)
-verificarSuscripcion().then(() => { actualizarSubUI(); aplicarPaywall(); });
+verificarSuscripcion().then(() => { actualizarSubUI(); aplicarPaywall(); esperarElPagoReciente(); });
 // Trae de la base lo que haya y sube lo que falte (si no hay base, no hace nada)
 sincronizar();
 
