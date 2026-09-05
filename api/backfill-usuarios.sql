@@ -16,14 +16,18 @@
 -- No pisa nada: si el código ya está en la tabla, lo deja como está.
 
 -- 'OR IGNORE': si el código ya está en la tabla, se saltea esa fila y sigue.
+-- El "- 10800" y el "-3 hours" son las tres horas que Argentina va atrás de la
+-- hora universal, que es en la que guardan la fecha tanto los ids como el
+-- servidor. Sin eso, todo lo cargado después de las 21:00 queda anotado al día
+-- siguiente y las fechas de alta salen corridas.
 INSERT OR IGNORE INTO usuarios (codigo, creado, visto, dias, origen)
 SELECT
   d.codigo,
   COALESCE(
-    date(MIN(CAST(json_extract(j.value, '$.id') AS INTEGER)) / 1000, 'unixepoch'),
-    substr(d.actualizado, 1, 10)
+    date(MIN(CAST(json_extract(j.value, '$.id') AS INTEGER)) / 1000 - 10800, 'unixepoch'),
+    date(datetime(d.actualizado, '-3 hours'))
   ),
-  substr(d.actualizado, 1, 10),
+  date(datetime(d.actualizado, '-3 hours')),
   1,
   'reconstruido'
 FROM datos d
@@ -34,5 +38,5 @@ GROUP BY d.codigo;
 -- Los que dejaron su email para pagar pero todavía no habían guardado
 -- movimientos: también son gente adentro y no hay que perderlos.
 INSERT OR IGNORE INTO usuarios (codigo, creado, visto, dias, origen)
-SELECT s.codigo, substr(s.actualizado, 1, 10), substr(s.actualizado, 1, 10), 1, 'reconstruido'
+SELECT s.codigo, date(datetime(s.actualizado, '-3 hours')), date(datetime(s.actualizado, '-3 hours')), 1, 'reconstruido'
 FROM suscripciones s;

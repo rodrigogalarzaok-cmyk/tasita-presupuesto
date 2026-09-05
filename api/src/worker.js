@@ -474,8 +474,11 @@ async function panel(url, env) {
       LEFT JOIN datos d ON d.codigo = u.codigo
       ORDER BY u.interno, u.creado DESC, u.visto DESC
     `),
+    // 'recibido' se guarda en hora universal (UTC), que es la del servidor. Acá
+    // se pasa a la hora de Argentina, que es la que Marc mira el reloj: si no,
+    // un aviso de las 23:56 del jueves aparece como las 02:56 del viernes.
     env.DB.prepare(`
-      SELECT substr(recibido,1,16) AS cuando, tipo, email, estado, hasta
+      SELECT substr(datetime(recibido,'-3 hours'),1,16) AS cuando, tipo, email, estado, hasta
       FROM eventos_mp ORDER BY id DESC LIMIT 8
     `)
   ]);
@@ -636,8 +639,14 @@ function cuerpoPanel(d) {
     ? `<div class="gente">${nuestros.map(ficha).join('')}</div>`
     : '<p class="vacio">No hay ninguno marcado.</p>';
 
+  // 'cuando' llega como '2026-09-04 23:56' (ya en hora de Argentina) → '04/09 23:56'.
+  const fechaHora = (s) => {
+    const [f, h] = String(s).split(' ');
+    return `${dm(f)} ${h || ''}`.trim();
+  };
+
   const filasEventos = d.eventos.length
-    ? d.eventos.map(e => `<tr><td>${esc(String(e.cuando).slice(5).replace('T', ' '))}</td><td>${esc(e.email || '—')}</td>
+    ? d.eventos.map(e => `<tr><td>${esc(fechaHora(e.cuando))}</td><td>${esc(e.email || '—')}</td>
         <td>${esc(e.estado || '—')}</td><td class="g">${e.hasta ? esc(dm(e.hasta)) : ''}</td></tr>`).join('')
     : '<tr><td colspan="4" class="g">Mercado Pago todavía no avisó de ningún pago.</td></tr>';
 
