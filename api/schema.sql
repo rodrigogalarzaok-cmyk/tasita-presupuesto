@@ -65,7 +65,11 @@ CREATE TABLE IF NOT EXISTS usuarios (
   creado TEXT,                          -- 'YYYY-MM-DD': el primer día que se lo vio
   visto  TEXT,                          -- 'YYYY-MM-DD': el último día que abrió la app
   dias   INTEGER NOT NULL DEFAULT 1,    -- cuántos días distintos la abrió (retención)
-  origen TEXT                           -- 'vivo' | 'reconstruido' (los de antes del cambio)
+  origen TEXT,                          -- 'vivo' | 'reconstruido' (los de antes del cambio)
+  -- 1 = somos nosotros probando, no un cliente. Se marca desde el panel y queda
+  -- afuera de todos los números. Nunca se borra la fila: los movimientos de esos
+  -- equipos son reales y sirven para probar.
+  interno INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_usuarios_creado ON usuarios (creado);

@@ -50,6 +50,9 @@ export default {
       if (url.pathname === '/panel/sw.js' && request.method === 'GET') {
         return swPanel();
       }
+      if (url.pathname === '/panel/interno' && request.method === 'POST') {
+        return await marcarInterno(request, url, env);
+      }
       if (url.pathname === '/email' && request.method === 'POST') {
         return await registrarEmail(request, env);
       }
@@ -400,24 +403,29 @@ async function panel(url, env) {
   // 'now' es UTC; Argentina está tres horas atrás. Mismo criterio que el resto.
   const HOY = "date('now','-3 hours')";
 
+  // 'interno = 0' en todos lados: los equipos nuestros no cuentan como clientes.
   const [resumen, altas, vencen, ultimos, eventos] = await env.DB.batch([
     env.DB.prepare(`
       SELECT
-        (SELECT COUNT(*) FROM usuarios)                                                  AS total,
-        (SELECT COUNT(*) FROM usuarios WHERE creado = ${HOY})                            AS altas_hoy,
-        (SELECT COUNT(*) FROM usuarios WHERE creado >= date(${HOY},'-6 days'))           AS altas_7,
-        (SELECT COUNT(*) FROM usuarios WHERE creado >= date(${HOY},'-29 days'))          AS altas_30,
-        (SELECT COUNT(*) FROM usuarios WHERE visto  = ${HOY})                            AS activos_hoy,
-        (SELECT COUNT(*) FROM usuarios WHERE visto  >= date(${HOY},'-6 days'))           AS activos_7,
-        (SELECT COUNT(*) FROM usuarios WHERE visto  >= date(${HOY},'-29 days'))          AS activos_30,
-        (SELECT COUNT(*) FROM suscripciones WHERE activa = 1 AND hasta >= ${HOY})        AS pagando,
-        (SELECT COUNT(*) FROM suscripciones WHERE email IS NOT NULL)                     AS con_email,
-        (SELECT COUNT(*) FROM suscripciones WHERE email IS NOT NULL
-                                             AND (activa = 0 OR hasta < ${HOY}))         AS email_sin_pagar
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0)                                AS total,
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 1)                                AS internos,
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND creado = ${HOY})             AS altas_hoy,
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND creado >= date(${HOY},'-6 days'))  AS altas_7,
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND creado >= date(${HOY},'-29 days')) AS altas_30,
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND visto  = ${HOY})             AS activos_hoy,
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND visto  >= date(${HOY},'-6 days'))  AS activos_7,
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND visto  >= date(${HOY},'-29 days')) AS activos_30,
+        (SELECT COUNT(*) FROM suscripciones s WHERE s.activa = 1 AND s.hasta >= ${HOY}
+           AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS pagando,
+        (SELECT COUNT(*) FROM suscripciones s WHERE s.email IS NOT NULL
+           AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS con_email,
+        (SELECT COUNT(*) FROM suscripciones s WHERE s.email IS NOT NULL
+           AND (s.activa = 0 OR s.hasta < ${HOY})
+           AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS email_sin_pagar
     `),
     env.DB.prepare(`
       SELECT creado AS dia, COUNT(*) AS n FROM usuarios
-      WHERE creado >= date(${HOY},'-20 days') GROUP BY creado ORDER BY dia
+      WHERE interno = 0 AND creado >= date(${HOY},'-20 days') GROUP BY creado ORDER BY dia
     `),
     // Cuándo se le termina la prueba a cada uno. Es una estimación: el reloj de
     // los 20 días corre en el celular de la persona, el servidor no lo ve. Se
@@ -426,15 +434,21 @@ async function panel(url, env) {
     env.DB.prepare(`
       SELECT date(max(creado,'${LANZAMIENTO}'),'+${DIAS_PRUEBA} days') AS vence, COUNT(*) AS n
       FROM usuarios
-      WHERE visto >= '${LANZAMIENTO}'
+      WHERE interno = 0 AND visto >= '${LANZAMIENTO}'
         AND codigo NOT IN (SELECT codigo FROM suscripciones WHERE activa = 1 AND hasta >= ${HOY})
       GROUP BY vence ORDER BY vence
     `),
+    // La lista sí trae a todos, internos incluidos: es donde se los marca.
+    // 'movs' cuenta los movimientos cargados, que es lo que distingue a alguien
+    // que usa la app de verdad de una prueba de dos toques.
     env.DB.prepare(`
-      SELECT u.codigo, u.creado, u.visto, u.dias, u.origen, s.email,
-             (s.activa = 1 AND s.hasta >= ${HOY}) AS paga
-      FROM usuarios u LEFT JOIN suscripciones s ON s.codigo = u.codigo
-      ORDER BY u.creado DESC, u.visto DESC LIMIT 15
+      SELECT u.codigo, u.creado, u.visto, u.dias, u.origen, u.interno, s.email,
+             (s.activa = 1 AND s.hasta >= ${HOY}) AS paga,
+             (SELECT COUNT(*) FROM json_each(json_extract(d.contenido,'$.txs'))) AS movs
+      FROM usuarios u
+      LEFT JOIN suscripciones s ON s.codigo = u.codigo
+      LEFT JOIN datos d ON d.codigo = u.codigo
+      ORDER BY u.interno, u.creado DESC, u.visto DESC
     `),
     env.DB.prepare(`
       SELECT substr(recibido,1,16) AS cuando, tipo, email, estado, hasta
@@ -458,6 +472,21 @@ async function panel(url, env) {
     });
   }
   return pagina('Tasita — panel', cuerpoPanel(datos), 200, env.CLAVE_PANEL);
+}
+
+// ── Marcar (o desmarcar) a alguien como "somos nosotros probando".
+//    No borra nada: la fila queda, sus movimientos quedan, y simplemente deja de
+//    contar en los números. Se puede volver atrás con otro toque.
+async function marcarInterno(request, url, env) {
+  if (!env.CLAVE_PANEL || url.searchParams.get('clave') !== env.CLAVE_PANEL) {
+    return responder({ error: 'clave incorrecta' }, 401, env);
+  }
+  const codigo = codigoValido(url.searchParams.get('codigo'));
+  if (!codigo) return responder({ error: 'código inválido' }, 400, env);
+
+  const interno = url.searchParams.get('interno') === '1' ? 1 : 0;
+  await env.DB.prepare('UPDATE usuarios SET interno = ? WHERE codigo = ?').bind(interno, codigo).run();
+  return responder({ ok: true, codigo, interno }, 200, env);
 }
 
 // ── Para que el teléfono lo deje "guardar como aplicación".
@@ -555,14 +584,22 @@ function cuerpoPanel(d) {
     return `quedan ${quedan}`;
   };
 
+  // Lista y no tabla: en un teléfono, seis columnas obligan a arrastrar de
+  // costado para llegar al botón. Así cada persona entra entera en el ancho.
   // El ≈ va pegado a la fecha de alta, que es el dato que es aproximado.
-  const filasUltimos = d.ultimos.map(u => `<tr>
-      <td><code>${esc(u.codigo)}</code></td>
-      <td>${u.origen === 'reconstruido' ? '≈' : ''}${esc(dm(u.creado))}</td>
-      <td>${esc(dm(u.visto))}</td>
-      <td>${prueba(u)}</td>
-      <td class="g">${esc(u.email || '—')}</td>
-    </tr>`).join('');
+  const filasUltimos = d.ultimos.map(u => `<div class="p${u.interno ? ' i' : ''}">
+      <div class="pd">
+        <code>${esc(u.codigo)}</code>
+        ${u.interno ? '<span class="mio">nuestro</span>'
+                    : (u.paga ? '<span class="ok">paga</span>' : '')}
+        <span class="pm">se sumó ${u.origen === 'reconstruido' ? '≈' : ''}${esc(dm(u.creado))}
+          · última vez ${esc(dm(u.visto))}
+          · ${esc(u.movs || 0)} mov.${u.interno ? '' : ' · ' + esc(prueba(u).replace(/<[^>]+>/g, ''))}
+          ${u.email ? '· ' + esc(u.email) : ''}</span>
+      </div>
+      <button class="marcar" data-codigo="${esc(u.codigo)}" data-interno="${u.interno ? 0 : 1}"
+        >${u.interno ? 'es cliente' : 'es nuestro'}</button>
+    </div>`).join('');
 
   const filasEventos = d.eventos.length
     ? d.eventos.map(e => `<tr><td>${esc(String(e.cuando).slice(5).replace('T', ' '))}</td><td>${esc(e.email || '—')}</td>
@@ -601,8 +638,12 @@ function cuerpoPanel(d) {
   ${vencidos ? `Ya se les venció a <b>${esc(vencidos)}</b>.` : ''}</p>
   <div class="tabla"><table><tr><th>Día</th><th>Cuántos</th><th></th></tr>${filasVence}</table></div>
 
-  <h2>Últimos que llegaron</h2>
-  <div class="tabla"><table><tr><th>Código</th><th>Se sumó</th><th>Última vez</th><th>Prueba</th><th>Mail</th></tr>${filasUltimos}</table></div>
+  <h2>Toda la gente${r.internos ? ` <span class="chip">${esc(r.internos)} nuestros, afuera de la cuenta</span>` : ''}</h2>
+  <p class="nota">Tocá <b>"es nuestro"</b> en los equipos de prueba: dejan de contar
+  en todos los números de arriba, sin borrar nada. Se vuelve atrás con otro toque.
+  <b>Mov.</b> es cuántos movimientos cargó — el que cargó dos y no volvió más
+  difícilmente sea un cliente.</p>
+  <div class="gente">${filasUltimos}</div>
   <p class="nota">El <b>≈</b> marca a los que ya estaban antes de que empezáramos
   a registrar: su fecha de alta salió del primer movimiento que cargaron.</p>
 
@@ -623,6 +664,25 @@ function pagina(titulo, cuerpo, status, clave) {
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/panel/sw.js', { scope: '/panel' }).catch(() => {});
 }
+// Marcar un equipo como nuestro (o devolverlo a la cuenta) y recargar los números.
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('.marcar');
+  if (!b) return;
+  b.disabled = true;
+  const antes = b.textContent;
+  b.textContent = '…';
+  try {
+    const r = await fetch('/panel/interno?clave=${esc(encodeURIComponent(clave))}'
+      + '&codigo=' + encodeURIComponent(b.dataset.codigo)
+      + '&interno=' + b.dataset.interno, { method: 'POST' });
+    if (!r.ok) throw new Error();
+    location.reload();
+  } catch {
+    b.disabled = false;
+    b.textContent = antes;
+    alert('No se pudo guardar. Probá de nuevo.');
+  }
+});
 <\/script>` : '';
 
   return new Response(`<!doctype html><html lang="es"><head>
@@ -656,15 +716,32 @@ td.n{font-weight:600}
 .g{color:#6b7280}
 .ok{background:#e7f4ee;color:#2f7d5d;border-radius:5px;padding:1px 5px;font-size:11px}
 .fin{background:#fdeceb;color:#b4342a;border-radius:5px;padding:1px 5px;font-size:11px}
+.mio{background:#eef0f3;color:#6b7280;border-radius:5px;padding:1px 5px;font-size:11px}
+.chip{background:#eef0f3;color:#6b7280;border-radius:6px;padding:2px 7px;font-size:11px;
+      text-transform:none;letter-spacing:0;font-weight:500}
+.gente{background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden}
+.p{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid #f0f1f3}
+.p:last-child{border-bottom:0}
+.p.i{opacity:.55}
+.pd{min-width:0;flex:1}
+.pm{display:block;font-size:12px;color:#6b7280;margin-top:3px}
+.marcar{font:inherit;font-size:12px;padding:4px 9px;border:1px solid #d7dae0;background:#fff;
+        color:#15181d;border-radius:7px;cursor:pointer}
+.marcar:active{background:#eef0f3}
+.marcar:disabled{opacity:.5}
 code{font-size:12px;background:#f0f1f3;border-radius:4px;padding:1px 4px}
 .nota{font-size:13px;color:#6b7280;margin:8px 0}
 .vacio{color:#6b7280;margin:0;font-size:14px}
 @media (prefers-color-scheme:dark){
   body{background:#0f1115;color:#e8eaed}
-  .c,.tabla,.barras{background:#181b21;border-color:#2a2f38}
+  .c,.tabla,.barras,.gente{background:#181b21;border-color:#2a2f38}
+  .p{border-color:#242832}
   th{background:#1d212a}th,td{border-color:#242832}
   .b em{color:#e8eaed}code{background:#242832}
   .ok{background:#16301f;color:#5fbf8d}.fin{background:#341c1a;color:#e8837a}
+  .mio,.chip{background:#242832;color:#9aa1ad}
+  .marcar{background:#242832;color:#e8eaed;border-color:#343a45}
+  .marcar:active{background:#2d323d}
 }
 </style></head><body>${cuerpo}${registro}</body></html>`, {
     status,
