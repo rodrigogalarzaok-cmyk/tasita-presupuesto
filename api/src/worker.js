@@ -557,7 +557,13 @@ function swPanel() {
   return new Response(
     `self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
-self.addEventListener('fetch', (e) => { e.respondWith(fetch(e.request)); });`,
+// Siempre a la red, y sin pasar por la caché del navegador: el panel muestra
+// números que cambian a cada rato, guardarlos sería mostrar información vieja.
+self.addEventListener('fetch', (e) => {
+  e.respondWith(
+    fetch(e.request, { cache: 'no-store' }).catch(() => fetch(e.request))
+  );
+});`,
     {
       status: 200,
       headers: {
@@ -650,9 +656,13 @@ function cuerpoPanel(d) {
         <td>${esc(e.estado || '—')}</td><td class="g">${e.hasta ? esc(dm(e.hasta)) : ''}</td></tr>`).join('')
     : '<tr><td colspan="4" class="g">Mercado Pago todavía no avisó de ningún pago.</td></tr>';
 
+  // Hora de Argentina, para que se vea de cuándo son los números que está mirando.
+  const ahora = new Date(Date.now() - 3 * 3600000).toISOString().slice(11, 16);
+
   return `
   <h1>Tasita Presupuesto</h1>
-  <p class="fecha">Al ${esc(hoy)}</p>
+  <p class="fecha">Datos del ${esc(dm(hoy))} a las ${esc(ahora)}
+    <button class="refrescar" id="refrescar">Actualizar</button></p>
 
   <h2>Gente adentro</h2>
   <div class="cards">
@@ -683,7 +693,7 @@ function cuerpoPanel(d) {
     ${tarjeta(r.pagando, 'pagando ahora')}
     ${tarjeta(r.email_sin_pagar, 'dejaron el mail sin pagar', 'fueron a pagar y no terminaron')}
     ${tarjeta(r.con_email, 'dejaron el mail en total')}
-    ${r.cancelaron ? tarjeta(r.cancelaron, 'se dieron de baja', 'siguen entrando hasta que se les termine el mes que pagaron') : ''}
+    ${tarjeta(r.cancelaron, 'se dieron de baja', 'siguen entrando hasta que se les termine el mes que pagaron')}
   </div>
 
   <h2>Pruebas que se terminan</h2>
@@ -718,6 +728,22 @@ function pagina(titulo, cuerpo, status, clave) {
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/panel/sw.js', { scope: '/panel' }).catch(() => {});
 }
+// ── Que los números estén frescos sin tener que pensarlo.
+//
+//    El panel es una página común: los números son los del momento en que se
+//    abrió. Si queda abierta en una pestaña o en la app del teléfono, se va
+//    quedando vieja sin avisar. Por eso se recarga sola al volver a ella, que es
+//    justo cuando la persona va a mirar los números.
+const abiertoDesde = Date.now();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && Date.now() - abiertoDesde > 20000) {
+    location.reload();
+  }
+});
+document.addEventListener('click', (e) => {
+  if (e.target.closest('#refrescar')) location.reload();
+});
+
 // Las listas largas arrancan cerradas: el panel se lee de un vistazo y se abren
 // solo cuando hacen falta.
 document.addEventListener('click', (e) => {
@@ -760,7 +786,10 @@ body{margin:0;padding:18px 16px 60px;font:16px/1.5 system-ui,-apple-system,"Sego
      background:#f6f7f9;color:#15181d;max-width:760px;margin-inline:auto}
 h1{font-size:22px;margin:0}
 h2{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:#6b7280;margin:28px 0 10px}
-.fecha{color:#6b7280;margin:2px 0 0;font-size:14px}
+.fecha{color:#6b7280;margin:6px 0 0;font-size:14px;display:flex;align-items:center;gap:10px}
+.refrescar{font:inherit;font-size:13px;padding:4px 12px;border:1px solid #d7dae0;background:#fff;
+           color:#2f7d5d;border-radius:20px;cursor:pointer;font-weight:600}
+.refrescar:active{background:#eef0f3}
 .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:10px}
 .c{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px}
 .c b{display:block;font-size:28px;line-height:1.1}
@@ -815,6 +844,8 @@ code{font-size:12px;background:#f0f1f3;border-radius:4px;padding:1px 4px}
   .marcar{background:#242832;color:#e8eaed;border-color:#343a45}
   .marcar:active{background:#2d323d}
   .cb i,.link{color:#5fbf8d}
+  .refrescar{background:#242832;color:#5fbf8d;border-color:#343a45}
+  .refrescar:active{background:#2d323d}
 }
 </style></head><body>${cuerpo}${registro}</body></html>`, {
     status,
