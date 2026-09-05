@@ -3494,7 +3494,31 @@ document.addEventListener('visibilitychange', () => {
     syncTimer = null;
     subirDatos();
   }
+  if (document.visibilityState === 'visible') revisarPagoAlVolver();
 });
+
+// ── Al volver a la app, si estaba bloqueada, se le vuelve a preguntar al servidor.
+//
+//    Este es el camino de quien acaba de pagar: "Suscribirme" abre Mercado Pago
+//    en otra pestaña y Tasita queda viva atrás. Cuando la persona vuelve, la
+//    página NO se recarga, así que el chequeo del arranque no corre de nuevo y
+//    seguiría viendo "Tu prueba terminó" con el pago ya acreditado. Sin esto hay
+//    que tocar "Ya pagué, activar" a mano, y quien no lo vea cree que pagó al pedo.
+//
+//    Solo consulta si la persona está bloqueada: para todos los demás no hay ni
+//    una llamada de más.
+let revisandoPago = false;
+function revisarPagoAlVolver() {
+  if (!PAGOS.COBRO_ACTIVO || revisandoPago || tieneAcceso()) return;
+  revisandoPago = true;
+  verificarSuscripcion()
+    .then(() => { actualizarSubUI(); aplicarPaywall(); })
+    .catch(() => {})
+    .finally(() => { revisandoPago = false; });
+}
+
+// En iPhone volver a una PWA no siempre dispara 'visibilitychange', pero sí 'focus'.
+window.addEventListener('focus', revisarPagoAlVolver);
 
 // ════════════════════════════════════════
 //  INIT
