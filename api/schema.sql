@@ -52,3 +52,22 @@ CREATE TABLE IF NOT EXISTS datos (
   version     INTEGER NOT NULL DEFAULT 1,
   actualizado TEXT
 );
+
+-- Quién entró y cuándo. Tabla aparte a propósito: no toca ni la suscripción ni
+-- los movimientos, así que si algo de acá falla la app sigue andando igual.
+--
+-- Se llena sola: cada vez que alguien abre la app, el Worker anota el día. No
+-- guarda nada de la persona (ni nombre, ni movimientos, ni plata), solo el
+-- código anónimo y fechas — lo justo para saber cuánta gente hay y quién sigue
+-- usando la app.
+CREATE TABLE IF NOT EXISTS usuarios (
+  codigo TEXT PRIMARY KEY,
+  creado TEXT,                          -- 'YYYY-MM-DD': el primer día que se lo vio
+  visto  TEXT,                          -- 'YYYY-MM-DD': el último día que abrió la app
+  dias   INTEGER NOT NULL DEFAULT 1,    -- cuántos días distintos la abrió (retención)
+  origen TEXT                           -- 'vivo' | 'reconstruido' (los de antes del cambio)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usuarios_creado ON usuarios (creado);
+
+CREATE INDEX IF NOT EXISTS idx_usuarios_visto ON usuarios (visto);

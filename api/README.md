@@ -28,6 +28,41 @@ En Mercado Pago, configurar la notificación de webhook apuntando a `<URL>/webho
 | `GET` | `/suscripcion?codigo=tas_xxx` | La app pregunta si ese código tiene acceso. Devuelve `{activa, hasta}`. |
 | `POST` | `/webhook-mp` | Mercado Pago avisa de un pago. Fuente de verdad. |
 | `GET` | `/salud` | Chequeo rápido de que el Worker está vivo. |
+| `GET` | `/panel?clave=…` | El panel privado: cuánta gente hay, quién pagó, a quién se le termina la prueba. |
+
+## El panel privado
+
+Vive en `https://tasita-api.<subdominio>.workers.dev/panel?clave=…`, que es **otro
+dominio** que el de la app (`presupuesto.tasita.com.ar`). Los clientes no llegan
+nunca: en la app no hay ningún link que apunte ahí, la dirección pide clave, y la
+clave no está en el HTML de la app sino guardada como secret de Cloudflare.
+
+```bash
+npx wrangler secret put CLAVE_PANEL    # cargarla, o cambiarla cuando haga falta
+```
+
+Agregando `&json` a la dirección devuelve los mismos números en JSON, sin la página.
+
+Se puede guardar en el teléfono como app (`/panel/manifest.json` y `/panel/sw.js`
+están para eso). El service worker no guarda nada en caché a propósito: cada vez
+que se abre el panel, va a buscar los números del momento.
+
+### De dónde salen los números
+
+La tabla `usuarios` se llena sola: cada vez que alguien abre Tasita, el Worker
+anota el día (una sola escritura por persona por día, en segundo plano; si falla,
+se ignora y la app ni se entera).
+
+Los 40 que ya estaban antes de que esto existiera se reconstruyeron con
+`backfill-usuarios.sql`, sacando la fecha del primer movimiento que cargó cada
+uno. Esos quedan marcados con `origen = 'reconstruido'` y se muestran con un `≈`.
+
+**El día que se le termina la prueba a cada uno es una estimación**: el reloj de
+los 20 días corre en el `localStorage` del celular de la persona, el servidor no
+lo ve. El panel lo calcula desde el día que vio a esa persona por primera vez, o
+desde el lanzamiento del cobro (`LANZAMIENTO` en `worker.js`), lo que sea más
+tarde. Para que sea exacto habría que hacer que la app le mande ese dato al
+servidor — es una línea en `index.html`, todavía sin hacer.
 
 ## Cosas a tener en cuenta
 

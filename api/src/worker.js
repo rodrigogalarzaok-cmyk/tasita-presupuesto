@@ -13,23 +13,42 @@
 const DIAS_GRACIA = 3; // margen por si MP se demora en cobrar la renovación
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') return responder(null, 204, env);
 
+    // Anotar quién entró se hace SIEMPRE en segundo plano (waitUntil): la
+    // respuesta a la app sale sin esperarlo y, si la anotación falla, no se
+    // entera nadie. Nunca puede romper ni demorar lo que la persona está usando.
+    const visita = (codigo) => {
+      if (codigo && ctx && ctx.waitUntil) ctx.waitUntil(marcarVisita(env, codigo));
+    };
+
     try {
       if (url.pathname === '/suscripcion' && request.method === 'GET') {
+        visita(codigoValido(url.searchParams.get('codigo')));
         return await getSuscripcion(url, env);
       }
       if (url.pathname === '/webhook-mp' && request.method === 'POST') {
         return await webhookMP(request, url, env);
       }
       if (url.pathname === '/datos' && request.method === 'GET') {
+        visita(codigoValido(url.searchParams.get('codigo')));
         return await getDatos(url, env);
       }
       if (url.pathname === '/datos' && request.method === 'PUT') {
-        return await putDatos(request, env);
+        return await putDatos(request, env, visita);
+      }
+      if (url.pathname === '/panel' && request.method === 'GET') {
+        return await panel(url, env);
+      }
+      // Lo que el teléfono necesita para dejarlo instalar como app.
+      if (url.pathname === '/panel/manifest.json' && request.method === 'GET') {
+        return manifestPanel(url, env);
+      }
+      if (url.pathname === '/panel/sw.js' && request.method === 'GET') {
+        return swPanel();
       }
       if (url.pathname === '/email' && request.method === 'POST') {
         return await registrarEmail(request, env);
@@ -88,12 +107,13 @@ async function getDatos(url, env) {
 }
 
 // ── La app guarda sus movimientos. Una fila por persona, se pisa entera.
-async function putDatos(request, env) {
+async function putDatos(request, env, visita) {
   let cuerpo;
   try { cuerpo = await request.json(); } catch { return responder({ error: 'cuerpo inválido' }, 400, env); }
 
   const codigo = codigoValido(cuerpo && cuerpo.codigo);
   if (!codigo) return responder({ error: 'código inválido' }, 400, env);
+  if (visita) visita(codigo);   // el código viene en el cuerpo, así que se anota acá
 
   const contenido = typeof cuerpo.contenido === 'string' ? cuerpo.contenido : null;
   if (!contenido) return responder({ error: 'falta contenido' }, 400, env);
@@ -335,6 +355,321 @@ async function registrar(env, tipo, mpId, codigo, email, estado, hasta, crudo) {
   } catch (e) {
     console.error('No se pudo registrar el evento:', e);
   }
+}
+
+// ── Anota que esta persona abrió la app hoy.
+//
+//    Escribe UNA sola vez por día por persona: si ya la vimos hoy, el UPDATE no
+//    corre (por el WHERE del final) y no se gasta escritura en la base. Abrir la
+//    app veinte veces en el día cuesta lo mismo que abrirla una.
+//
+//    Si algo falla acá, se ignora: es un registro para nosotros, no puede dejar
+//    a nadie sin poder usar Tasita.
+async function marcarVisita(env, codigo) {
+  const hoy = hoyISO();
+  try {
+    await env.DB.prepare(`
+      INSERT INTO usuarios (codigo, creado, visto, dias, origen)
+      VALUES (?, ?, ?, 1, 'vivo')
+      ON CONFLICT(codigo) DO UPDATE SET
+        dias  = usuarios.dias + 1,
+        visto = excluded.visto
+      WHERE usuarios.visto < excluded.visto
+    `).bind(codigo, hoy, hoy).run();
+  } catch (e) {
+    console.error('No se pudo anotar la visita:', e);
+  }
+}
+
+// El día que se prendió el cobro. Antes de esta fecha nadie tenía el reloj de
+// la prueba corriendo, así que para los de la beta los 20 días arrancan acá.
+// Tiene que coincidir con PAGOS.DIAS_PRUEBA y COBRO_ACTIVO de la app.
+const LANZAMIENTO = '2026-08-25';
+const DIAS_PRUEBA = 20;
+
+// ── Panel privado: los números del negocio en una página que se abre en el celular.
+//    Se entra con  /panel?clave=...  y la clave vive como secret de Cloudflare.
+async function panel(url, env) {
+  if (!env.CLAVE_PANEL) {
+    return pagina('Falta la clave', 'Cargala una sola vez desde la carpeta <code>api</code>:<br><br><code>npx wrangler secret put CLAVE_PANEL</code>', 503);
+  }
+  if ((url.searchParams.get('clave') || '') !== env.CLAVE_PANEL) {
+    return pagina('Clave incorrecta', 'El link tiene que terminar en <code>?clave=…</code>', 401);
+  }
+
+  // 'now' es UTC; Argentina está tres horas atrás. Mismo criterio que el resto.
+  const HOY = "date('now','-3 hours')";
+
+  const [resumen, altas, vencen, ultimos, eventos] = await env.DB.batch([
+    env.DB.prepare(`
+      SELECT
+        (SELECT COUNT(*) FROM usuarios)                                                  AS total,
+        (SELECT COUNT(*) FROM usuarios WHERE creado = ${HOY})                            AS altas_hoy,
+        (SELECT COUNT(*) FROM usuarios WHERE creado >= date(${HOY},'-6 days'))           AS altas_7,
+        (SELECT COUNT(*) FROM usuarios WHERE creado >= date(${HOY},'-29 days'))          AS altas_30,
+        (SELECT COUNT(*) FROM usuarios WHERE visto  = ${HOY})                            AS activos_hoy,
+        (SELECT COUNT(*) FROM usuarios WHERE visto  >= date(${HOY},'-6 days'))           AS activos_7,
+        (SELECT COUNT(*) FROM usuarios WHERE visto  >= date(${HOY},'-29 days'))          AS activos_30,
+        (SELECT COUNT(*) FROM suscripciones WHERE activa = 1 AND hasta >= ${HOY})        AS pagando,
+        (SELECT COUNT(*) FROM suscripciones WHERE email IS NOT NULL)                     AS con_email,
+        (SELECT COUNT(*) FROM suscripciones WHERE email IS NOT NULL
+                                             AND (activa = 0 OR hasta < ${HOY}))         AS email_sin_pagar
+    `),
+    env.DB.prepare(`
+      SELECT creado AS dia, COUNT(*) AS n FROM usuarios
+      WHERE creado >= date(${HOY},'-20 days') GROUP BY creado ORDER BY dia
+    `),
+    // Cuándo se le termina la prueba a cada uno. Es una estimación: el reloj de
+    // los 20 días corre en el celular de la persona, el servidor no lo ve. Se
+    // calcula desde el día que la vimos por primera vez (o desde el lanzamiento,
+    // lo que sea más tarde). Los que ya pagan no cuentan.
+    env.DB.prepare(`
+      SELECT date(max(creado,'${LANZAMIENTO}'),'+${DIAS_PRUEBA} days') AS vence, COUNT(*) AS n
+      FROM usuarios
+      WHERE visto >= '${LANZAMIENTO}'
+        AND codigo NOT IN (SELECT codigo FROM suscripciones WHERE activa = 1 AND hasta >= ${HOY})
+      GROUP BY vence ORDER BY vence
+    `),
+    env.DB.prepare(`
+      SELECT u.codigo, u.creado, u.visto, u.dias, u.origen, s.email,
+             (s.activa = 1 AND s.hasta >= ${HOY}) AS paga
+      FROM usuarios u LEFT JOIN suscripciones s ON s.codigo = u.codigo
+      ORDER BY u.creado DESC, u.visto DESC LIMIT 15
+    `),
+    env.DB.prepare(`
+      SELECT substr(recibido,1,16) AS cuando, tipo, email, estado, hasta
+      FROM eventos_mp ORDER BY id DESC LIMIT 8
+    `)
+  ]);
+
+  const r = (resumen.results && resumen.results[0]) || {};
+  const datos = {
+    resumen: r,
+    altas:   altas.results   || [],
+    vencen:  vencen.results  || [],
+    ultimos: ultimos.results || [],
+    eventos: eventos.results || []
+  };
+
+  if (url.searchParams.get('json') !== null) {
+    return new Response(JSON.stringify(datos, null, 2), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }
+    });
+  }
+  return pagina('Tasita — panel', cuerpoPanel(datos), 200, env.CLAVE_PANEL);
+}
+
+// ── Para que el teléfono lo deje "guardar como aplicación".
+//    El ícono es un dibujo hecho acá mismo (tres barras), distinto al de Tasita:
+//    así en el teléfono no se confunde el panel con la app de los clientes.
+function manifestPanel(url, env) {
+  if (!env.CLAVE_PANEL || url.searchParams.get('clave') !== env.CLAVE_PANEL) {
+    return new Response('{}', { status: 401, headers: { 'Content-Type': 'application/json' } });
+  }
+  const icono = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">' +
+    '<rect width="192" height="192" rx="42" fill="#2f7d5d"/>' +
+    '<rect x="46" y="104" width="24" height="46" rx="6" fill="#fff"/>' +
+    '<rect x="84" y="72" width="24" height="78" rx="6" fill="#fff"/>' +
+    '<rect x="122" y="42" width="24" height="108" rx="6" fill="#fff"/></svg>'
+  );
+  const manifest = {
+    name: 'Tasita — panel',
+    short_name: 'Panel',
+    // Con la clave adentro: al tocar el ícono entra derecho, sin escribir nada.
+    start_url: `/panel?clave=${encodeURIComponent(env.CLAVE_PANEL)}`,
+    scope: '/panel',
+    display: 'standalone',
+    background_color: '#0f1115',
+    theme_color: '#0f1115',
+    icons: [
+      { src: icono, sizes: '192x192', type: 'image/svg+xml', purpose: 'any' },
+      { src: icono, sizes: '512x512', type: 'image/svg+xml', purpose: 'maskable' }
+    ]
+  };
+  return new Response(JSON.stringify(manifest), {
+    status: 200,
+    headers: { 'Content-Type': 'application/manifest+json; charset=utf-8', 'Cache-Control': 'no-store' }
+  });
+}
+
+// El panel NO guarda nada en el teléfono: cada vez que se abre va a buscar los
+// números del momento. Este archivo existe solo porque el teléfono lo pide para
+// permitir instalarlo como app.
+function swPanel() {
+  return new Response(
+    `self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+self.addEventListener('fetch', (e) => { e.respondWith(fetch(e.request)); });`,
+    {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/javascript; charset=utf-8',
+        // Permite que el archivo, viviendo en /panel/, mande también sobre /panel.
+        'Service-Worker-Allowed': '/panel',
+        'Cache-Control': 'no-store'
+      }
+    }
+  );
+}
+
+function esc(v) {
+  return String(v === null || v === undefined ? '' : v)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function cuerpoPanel(d) {
+  const r = d.resumen;
+  const hoy = hoyISO();
+
+  const tarjeta = (n, t, extra) =>
+    `<div class="c"><b>${esc(n)}</b><span>${esc(t)}</span>${extra ? `<i>${esc(extra)}</i>` : ''}</div>`;
+
+  // Barras de altas por día: el alto de cada una es relativo al mejor día.
+  const tope = Math.max(1, ...d.altas.map(a => a.n));
+  const barras = d.altas.length
+    ? d.altas.map(a => `<div class="b" title="${esc(a.dia)}: ${esc(a.n)}">
+         <u style="height:${Math.round((a.n / tope) * 60) + 4}px"></u>
+         <em>${esc(a.n)}</em><s>${esc(a.dia.slice(8))}/${esc(a.dia.slice(5, 7))}</s></div>`).join('')
+    : '<p class="vacio">Todavía no hay altas en estos días.</p>';
+
+  // '2026-09-14' → '14/09'. Las fechas largas parten la tabla en dos en el celular.
+  const dm = (iso) => `${String(iso).slice(8)}/${String(iso).slice(5, 7)}`;
+
+  const proximos = d.vencen.filter(v => v.vence >= hoy).slice(0, 8);
+  const vencidos = d.vencen.filter(v => v.vence < hoy).reduce((s, v) => s + v.n, 0);
+  const filasVence = proximos.length
+    ? proximos.map(v => `<tr><td>${esc(dm(v.vence))}</td><td class="n">${esc(v.n)}</td>
+        <td class="g">${v.vence === hoy ? 'hoy' : 'en ' + Math.round((Date.parse(v.vence) - Date.parse(hoy)) / 86400000) + ' días'}</td></tr>`).join('')
+    : '<tr><td colspan="3" class="g">No queda nadie con prueba por vencer.</td></tr>';
+
+  // Cuánto le queda de prueba a cada uno. Mismo cálculo que la app: 20 días
+  // desde que arrancó, y nadie arrancó antes del día que se prendió el cobro.
+  const prueba = (u) => {
+    if (u.paga) return '<span class="ok">paga</span>';
+    const vence = sumarDias(u.creado > LANZAMIENTO ? u.creado : LANZAMIENTO, DIAS_PRUEBA);
+    const quedan = Math.round((Date.parse(vence) - Date.parse(hoy)) / 86400000);
+    if (quedan < 0)  return '<span class="fin">terminó</span>';
+    if (quedan === 0) return '<span class="fin">termina hoy</span>';
+    return `quedan ${quedan}`;
+  };
+
+  // El ≈ va pegado a la fecha de alta, que es el dato que es aproximado.
+  const filasUltimos = d.ultimos.map(u => `<tr>
+      <td><code>${esc(u.codigo)}</code></td>
+      <td>${u.origen === 'reconstruido' ? '≈' : ''}${esc(dm(u.creado))}</td>
+      <td>${esc(dm(u.visto))}</td>
+      <td>${prueba(u)}</td>
+      <td class="g">${esc(u.email || '—')}</td>
+    </tr>`).join('');
+
+  const filasEventos = d.eventos.length
+    ? d.eventos.map(e => `<tr><td>${esc(String(e.cuando).slice(5).replace('T', ' '))}</td><td>${esc(e.email || '—')}</td>
+        <td>${esc(e.estado || '—')}</td><td class="g">${e.hasta ? esc(dm(e.hasta)) : ''}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="g">Mercado Pago todavía no avisó de ningún pago.</td></tr>';
+
+  return `
+  <h1>Tasita Presupuesto</h1>
+  <p class="fecha">Al ${esc(hoy)}</p>
+
+  <h2>Gente adentro</h2>
+  <div class="cards">
+    ${tarjeta(r.total, 'en total')}
+    ${tarjeta(r.activos_7, 'la usaron esta semana', `${r.activos_hoy} hoy`)}
+    ${tarjeta(r.activos_30, 'la usaron este mes')}
+  </div>
+
+  <h2>Se sumaron</h2>
+  <div class="cards">
+    ${tarjeta(r.altas_hoy, 'hoy')}
+    ${tarjeta(r.altas_7, 'en 7 días')}
+    ${tarjeta(r.altas_30, 'en 30 días')}
+  </div>
+  <div class="barras">${barras}</div>
+
+  <h2>Plata</h2>
+  <div class="cards">
+    ${tarjeta(r.pagando, 'pagando ahora')}
+    ${tarjeta(r.email_sin_pagar, 'dejaron el mail sin pagar', 'fueron a pagar y no terminaron')}
+    ${tarjeta(r.con_email, 'dejaron el mail en total')}
+  </div>
+
+  <h2>Pruebas que se terminan</h2>
+  <p class="nota">Estimado: el reloj de los 20 días corre en el celular de cada
+  persona, acá se calcula desde el día que la vimos por primera vez.
+  ${vencidos ? `Ya se les venció a <b>${esc(vencidos)}</b>.` : ''}</p>
+  <div class="tabla"><table><tr><th>Día</th><th>Cuántos</th><th></th></tr>${filasVence}</table></div>
+
+  <h2>Últimos que llegaron</h2>
+  <div class="tabla"><table><tr><th>Código</th><th>Se sumó</th><th>Última vez</th><th>Prueba</th><th>Mail</th></tr>${filasUltimos}</table></div>
+  <p class="nota">El <b>≈</b> marca a los que ya estaban antes de que empezáramos
+  a registrar: su fecha de alta salió del primer movimiento que cargaron.</p>
+
+  <h2>Últimos avisos de Mercado Pago</h2>
+  <div class="tabla"><table><tr><th>Cuándo</th><th>Mail</th><th>Estado</th><th>Paga hasta</th></tr>${filasEventos}</table></div>`;
+}
+
+function pagina(titulo, cuerpo, status, clave) {
+  // El manifiesto y el service worker solo se enganchan si ya entró con la clave
+  // correcta. En la pantalla de "clave incorrecta" no hay nada que instalar.
+  const comoApp = clave ? `
+<link rel="manifest" href="/panel/manifest.json?clave=${esc(encodeURIComponent(clave))}">
+<meta name="theme-color" content="#0f1115">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Panel">` : '';
+
+  const registro = clave ? `<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/panel/sw.js', { scope: '/panel' }).catch(() => {});
+}
+<\/script>` : '';
+
+  return new Response(`<!doctype html><html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex"><title>${esc(titulo)}</title>${comoApp}<style>
+:root{color-scheme:light dark}
+*{box-sizing:border-box}
+body{margin:0;padding:18px 16px 60px;font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+     background:#f6f7f9;color:#15181d;max-width:760px;margin-inline:auto}
+h1{font-size:22px;margin:0}
+h2{font-size:14px;text-transform:uppercase;letter-spacing:.06em;color:#6b7280;margin:28px 0 10px}
+.fecha{color:#6b7280;margin:2px 0 0;font-size:14px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:10px}
+.c{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:12px}
+.c b{display:block;font-size:28px;line-height:1.1}
+.c span{display:block;font-size:13px;color:#6b7280;margin-top:2px}
+.c i{display:block;font-size:12px;color:#9aa1ad;font-style:normal;margin-top:4px}
+.barras{display:flex;align-items:flex-end;gap:3px;background:#fff;border:1px solid #e5e7eb;
+        border-radius:12px;padding:12px 10px;overflow-x:auto}
+.b{flex:1;min-width:22px;text-align:center}
+.b u{display:block;background:#2f7d5d;border-radius:3px 3px 0 0;margin:0 auto;width:70%}
+.b em{display:block;font-style:normal;font-size:11px;color:#15181d;margin-top:3px}
+.b s{display:block;text-decoration:none;font-size:10px;color:#9aa1ad}
+/* La tabla scrollea sola de costado si no entra; la página nunca se mueve. */
+.tabla{overflow-x:auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-size:12px;color:#6b7280;font-weight:600;background:#fafbfc}
+th,td{padding:8px 10px;border-bottom:1px solid #f0f1f3;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+td.n{font-weight:600}
+.g{color:#6b7280}
+.ok{background:#e7f4ee;color:#2f7d5d;border-radius:5px;padding:1px 5px;font-size:11px}
+.fin{background:#fdeceb;color:#b4342a;border-radius:5px;padding:1px 5px;font-size:11px}
+code{font-size:12px;background:#f0f1f3;border-radius:4px;padding:1px 4px}
+.nota{font-size:13px;color:#6b7280;margin:8px 0}
+.vacio{color:#6b7280;margin:0;font-size:14px}
+@media (prefers-color-scheme:dark){
+  body{background:#0f1115;color:#e8eaed}
+  .c,.tabla,.barras{background:#181b21;border-color:#2a2f38}
+  th{background:#1d212a}th,td{border-color:#242832}
+  .b em{color:#e8eaed}code{background:#242832}
+  .ok{background:#16301f;color:#5fbf8d}.fin{background:#341c1a;color:#e8837a}
+}
+</style></head><body>${cuerpo}${registro}</body></html>`, {
+    status,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }
+  });
 }
 
 function responder(datos, status, env) {
