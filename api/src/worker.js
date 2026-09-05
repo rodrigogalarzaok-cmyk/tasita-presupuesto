@@ -587,7 +587,7 @@ function cuerpoPanel(d) {
   // Lista y no tabla: en un teléfono, seis columnas obligan a arrastrar de
   // costado para llegar al botón. Así cada persona entra entera en el ancho.
   // El ≈ va pegado a la fecha de alta, que es el dato que es aproximado.
-  const filasUltimos = d.ultimos.map(u => `<div class="p${u.interno ? ' i' : ''}">
+  const ficha = (u) => `<div class="p${u.interno ? ' i' : ''}">
       <div class="pd">
         <code>${esc(u.codigo)}</code>
         ${u.interno ? '<span class="mio">nuestro</span>'
@@ -599,7 +599,18 @@ function cuerpoPanel(d) {
       </div>
       <button class="marcar" data-codigo="${esc(u.codigo)}" data-interno="${u.interno ? 0 : 1}"
         >${u.interno ? 'es cliente' : 'es nuestro'}</button>
-    </div>`).join('');
+    </div>`;
+
+  const reales   = d.ultimos.filter(u => !u.interno);
+  const nuestros = d.ultimos.filter(u => u.interno);
+
+  const listaReales = reales.length
+    ? `<div class="gente">${reales.map(ficha).join('')}</div>`
+    : '<p class="vacio">Todavía no hay ningún cliente.</p>';
+
+  const listaNuestros = nuestros.length
+    ? `<div class="gente">${nuestros.map(ficha).join('')}</div>`
+    : '<p class="vacio">No hay ninguno marcado.</p>';
 
   const filasEventos = d.eventos.length
     ? d.eventos.map(e => `<tr><td>${esc(String(e.cuando).slice(5).replace('T', ' '))}</td><td>${esc(e.email || '—')}</td>
@@ -612,9 +623,18 @@ function cuerpoPanel(d) {
 
   <h2>Gente adentro</h2>
   <div class="cards">
-    ${tarjeta(r.total, 'en total')}
+    <button class="c cb" id="verGente">
+      <b>${esc(r.total)}</b><span>en total</span><i>tocá para ver quiénes son ›</i>
+    </button>
     ${tarjeta(r.activos_7, 'la usaron esta semana', `${r.activos_hoy} hoy`)}
     ${tarjeta(r.activos_30, 'la usaron este mes')}
+  </div>
+  <div id="gente" hidden>
+    ${listaReales}
+    <p class="nota">Si alguno es un equipo nuestro, tocá <b>"es nuestro"</b> y sale
+    de todos los números. El <b>≈</b> marca a los que ya estaban antes de que
+    empezáramos a registrar: su fecha de alta salió del primer movimiento que
+    cargaron.</p>
   </div>
 
   <h2>Se sumaron</h2>
@@ -638,17 +658,17 @@ function cuerpoPanel(d) {
   ${vencidos ? `Ya se les venció a <b>${esc(vencidos)}</b>.` : ''}</p>
   <div class="tabla"><table><tr><th>Día</th><th>Cuántos</th><th></th></tr>${filasVence}</table></div>
 
-  <h2>Toda la gente${r.internos ? ` <span class="chip">${esc(r.internos)} nuestros, afuera de la cuenta</span>` : ''}</h2>
-  <p class="nota">Tocá <b>"es nuestro"</b> en los equipos de prueba: dejan de contar
-  en todos los números de arriba, sin borrar nada. Se vuelve atrás con otro toque.
-  <b>Mov.</b> es cuántos movimientos cargó — el que cargó dos y no volvió más
-  difícilmente sea un cliente.</p>
-  <div class="gente">${filasUltimos}</div>
-  <p class="nota">El <b>≈</b> marca a los que ya estaban antes de que empezáramos
-  a registrar: su fecha de alta salió del primer movimiento que cargaron.</p>
-
   <h2>Últimos avisos de Mercado Pago</h2>
-  <div class="tabla"><table><tr><th>Cuándo</th><th>Mail</th><th>Estado</th><th>Paga hasta</th></tr>${filasEventos}</table></div>`;
+  <div class="tabla"><table><tr><th>Cuándo</th><th>Mail</th><th>Estado</th><th>Paga hasta</th></tr>${filasEventos}</table></div>
+
+  <button class="link" id="verNuestros">Ver los ${esc(r.internos)} equipos nuestros ›</button>
+  <div id="nuestros" hidden>
+    <p class="nota">Estos no cuentan en ningún número de arriba. Son los que se
+    sumaron antes del lanzamiento (${esc(dm(LANZAMIENTO))}) más los que fuiste
+    marcando. Si alguno resulta ser un cliente de verdad, tocá <b>"es cliente"</b>
+    y vuelve a la cuenta.</p>
+    ${listaNuestros}
+  </div>`;
 }
 
 function pagina(titulo, cuerpo, status, clave) {
@@ -664,6 +684,18 @@ function pagina(titulo, cuerpo, status, clave) {
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/panel/sw.js', { scope: '/panel' }).catch(() => {});
 }
+// Las listas largas arrancan cerradas: el panel se lee de un vistazo y se abren
+// solo cuando hacen falta.
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('#verGente, #verNuestros');
+  if (!b) return;
+  const caja = document.getElementById(b.id === 'verGente' ? 'gente' : 'nuestros');
+  caja.hidden = !caja.hidden;
+  const flecha = caja.hidden ? '›' : '⌄';
+  const donde = b.querySelector('i') || b;
+  donde.textContent = donde.textContent.replace(/[›⌄]$/, flecha);
+});
+
 // Marcar un equipo como nuestro (o devolverlo a la cuenta) y recargar los números.
 document.addEventListener('click', async (e) => {
   const b = e.target.closest('.marcar');
@@ -719,6 +751,12 @@ td.n{font-weight:600}
 .mio{background:#eef0f3;color:#6b7280;border-radius:5px;padding:1px 5px;font-size:11px}
 .chip{background:#eef0f3;color:#6b7280;border-radius:6px;padding:2px 7px;font-size:11px;
       text-transform:none;letter-spacing:0;font-weight:500}
+/* La tarjeta del total es un botón: abre la lista de quiénes son. */
+.cb{font:inherit;text-align:left;cursor:pointer;color:inherit}
+.cb i{color:#2f7d5d}
+#gente,#nuestros{margin-top:10px}
+.link{font:inherit;font-size:14px;background:none;border:0;padding:14px 0 0;
+      color:#2f7d5d;cursor:pointer;display:block}
 .gente{background:#fff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden}
 .p{display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid #f0f1f3}
 .p:last-child{border-bottom:0}
@@ -742,6 +780,7 @@ code{font-size:12px;background:#f0f1f3;border-radius:4px;padding:1px 4px}
   .mio,.chip{background:#242832;color:#9aa1ad}
   .marcar{background:#242832;color:#e8eaed;border-color:#343a45}
   .marcar:active{background:#2d323d}
+  .cb i,.link{color:#5fbf8d}
 }
 </style></head><body>${cuerpo}${registro}</body></html>`, {
     status,
