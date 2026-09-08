@@ -11,7 +11,11 @@ CREATE TABLE IF NOT EXISTS suscripciones (
   hasta       TEXT,               -- 'YYYY-MM-DD' hasta cuándo tiene acceso
   email       TEXT,               -- el que declaró para pagar
   mp_id       TEXT,               -- id del pago/suscripción en Mercado Pago
-  actualizado TEXT                -- ISO del último cambio
+  actualizado TEXT,               -- ISO del último cambio
+  -- Lo último que informó Mercado Pago ('al dia', 'cancelled', 'paused'…).
+  -- Cancelar NO corta el acceso: el mes pagado se respeta y la fila se vence
+  -- sola. Esto es solo para saber quiénes se van a ir cuando se les termine.
+  estado      TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_sub_email ON suscripciones (email);
@@ -69,9 +73,25 @@ CREATE TABLE IF NOT EXISTS usuarios (
   -- 1 = somos nosotros probando, no un cliente. Se marca desde el panel y queda
   -- afuera de todos los números. Nunca se borra la fila: los movimientos de esos
   -- equipos son reales y sirven para probar.
-  interno INTEGER NOT NULL DEFAULT 0
+  interno INTEGER NOT NULL DEFAULT 0,
+  -- 1 = esta persona ya puso su nombre en la app, o sea que entró de verdad y no
+  -- pasó de largo. Es el número que cuenta personas: alguien puede abrir la app
+  -- en el navegador de Instagram, después en Chrome y después instalada, y eso
+  -- son tres códigos distintos para un solo ser humano — pero el nombre lo pone
+  -- una sola vez, donde se queda. Nunca vuelve a 0.
+  activo INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_usuarios_creado ON usuarios (creado);
 
 CREATE INDEX IF NOT EXISTS idx_usuarios_visto ON usuarios (visto);
+
+-- ── Migraciones aplicadas sobre la base que ya estaba en producción.
+--    Arriba están dentro del CREATE TABLE (para una base nueva); acá quedan
+--    anotadas como referencia de lo que se corrió a mano y cuándo. SQLite no
+--    tiene "ADD COLUMN IF NOT EXISTS": si se corre este archivo entero sobre la
+--    base que ya existe, estas dos líneas dan "duplicate column name" y se
+--    pueden ignorar, no rompen nada.
+--
+--    2026-09-04:  ALTER TABLE suscripciones ADD COLUMN estado TEXT;
+--    2026-09-08:  ALTER TABLE usuarios ADD COLUMN activo INTEGER NOT NULL DEFAULT 0;

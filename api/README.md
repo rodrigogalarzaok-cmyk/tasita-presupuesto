@@ -66,6 +66,37 @@ Lo que **no** se puede distinguir solo son los teléfonos propios usando la app 
 verdad: esos hay que marcarlos a mano una vez con el botón del panel. El código
 de cada equipo se ve en **Más → "Mi código"**.
 
+### Personas vs. aperturas
+
+El panel muestra dos números distintos y **no son lo mismo**:
+
+- **Personas** (`usuarios.activo = 1`): las que llegaron a poner su nombre en la
+  app. Es el número de gente. La app avisa con `&activo=1` colgado de la consulta
+  de suscripción que ya hacía — ni una llamada de más. Nunca vuelve a 0, y si la
+  app no manda el dato (versión vieja, sin internet) queda para la próxima vez.
+- **Aperturas** (`usuarios` a secas): cuenta códigos, y **un código es un
+  navegador, no una persona**. Quien mira desde Instagram, después abre en su
+  navegador y después instala la app son tres códigos para un solo ser humano.
+  Sirve para medir si un video funcionó, no para contar clientes.
+
+Al implementarlo se marcaron con `activo = 1` los que ya tenían movimientos
+cargados (cargar un movimiento exige haber puesto el nombre). Los que lo pusieron
+pero nunca cargaron nada se van marcando solos al abrir la app, así que **el
+número arranca bajo y sube unos días**.
+
+### El código viaja al saltar de navegador
+
+Cuando alguien llega desde Instagram y toca abrir en Chrome/Safari (o copia el
+link), la dirección lleva `?id=<código>&t=<hora>` y el navegador destino lo
+adopta en vez de inventar uno nuevo. Además de no contarlo dos veces, evita que
+esa persona pierda los días de prueba y los movimientos que ya tenía.
+
+Tres candados, en `index.html`: se adopta **solo si no hay ningún código
+guardado** (la lógica vive dentro de `miCodigo()`, así que es imposible pisarle
+el suyo a alguien), **vence a los 10 minutos** (`MINUTOS_TRASPASO`), y el código
+**se borra de la barra** apenas se usa. Un link que quede pegado en un chat es,
+para el que lo abra después, la dirección común y corriente.
+
 ⚠️ **Nunca limpiar por fecha.** El 2026-09-04 se corrió
 `DELETE FROM usuarios WHERE … OR creado >= date('now','-3 hours')` para sacar
 unos residuos de prueba y se llevó puestas **todas las altas reales de ese día**

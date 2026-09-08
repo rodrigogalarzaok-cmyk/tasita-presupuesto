@@ -36,8 +36,13 @@ export default {
     // Anotar quién entró se hace SIEMPRE en segundo plano (waitUntil): la
     // respuesta a la app sale sin esperarlo y, si la anotación falla, no se
     // entera nadie. Nunca puede romper ni demorar lo que la persona está usando.
+    // 'activo=1' lo manda la app cuando esa persona ya puso su nombre. Es lo que
+    // permite contar personas y no navegadores. Si no viene, no cambia nada: la
+    // app vieja que todavía no se actualizó sigue funcionando igual que siempre.
+    const yaEntro = url.searchParams.get('activo') === '1';
+
     const visita = (codigo) => {
-      if (codigo && ctx && ctx.waitUntil) ctx.waitUntil(marcarVisita(env, codigo, deAfuera));
+      if (codigo && ctx && ctx.waitUntil) ctx.waitUntil(marcarVisita(env, codigo, deAfuera, yaEntro));
     };
 
     try {
@@ -401,17 +406,27 @@ async function registrar(env, tipo, mpId, codigo, email, estado, hasta, crudo) {
 //    somos nosotros probando. Se anota marcado como interno y no cuenta en
 //    ningún número. Al que YA existe no se le toca esa marca: si un cliente
 //    real llegara alguna vez por un camino raro, no se lo saca de la cuenta.
-async function marcarVisita(env, codigo, deAfuera) {
+async function marcarVisita(env, codigo, deAfuera, yaEntro) {
   const hoy = hoyISO();
   try {
     await env.DB.prepare(`
-      INSERT INTO usuarios (codigo, creado, visto, dias, origen, interno)
-      VALUES (?, ?, ?, 1, ?, ?)
+      INSERT INTO usuarios (codigo, creado, visto, dias, origen, interno, activo)
+      VALUES (?, ?, ?, 1, ?, ?, ?)
       ON CONFLICT(codigo) DO UPDATE SET
         dias  = usuarios.dias + 1,
         visto = excluded.visto
       WHERE usuarios.visto < excluded.visto
-    `).bind(codigo, hoy, hoy, deAfuera ? 'prueba' : 'vivo', deAfuera ? 1 : 0).run();
+    `).bind(codigo, hoy, hoy, deAfuera ? 'prueba' : 'vivo', deAfuera ? 1 : 0, yaEntro ? 1 : 0).run();
+
+    // El nombre se puede poner en cualquier momento, incluso un rato después de
+    // haber abierto la app, así que la marca va aparte del INSERT de arriba (que
+    // solo corre una vez por día). El 'AND activo = 0' hace que se escriba una
+    // sola vez en la vida de esa persona: después es lectura y nada más.
+    if (yaEntro) {
+      await env.DB
+        .prepare('UPDATE usuarios SET activo = 1 WHERE codigo = ? AND activo = 0')
+        .bind(codigo).run();
+    }
   } catch (e) {
     console.error('No se pudo anotar la visita:', e);
   }
@@ -442,6 +457,10 @@ async function panel(url, env) {
       SELECT
         (SELECT COUNT(*) FROM usuarios WHERE interno = 0)                                AS total,
         (SELECT COUNT(*) FROM usuarios WHERE interno = 1)                                AS internos,
+        -- Personas, no navegadores: las que llegaron a poner su nombre.
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND activo = 1)                 AS personas,
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND activo = 1 AND creado = ${HOY})              AS personas_hoy,
+        (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND activo = 1 AND creado >= date(${HOY},'-6 days')) AS personas_7,
         (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND creado = ${HOY})             AS altas_hoy,
         (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND creado >= date(${HOY},'-6 days'))  AS altas_7,
         (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND creado >= date(${HOY},'-29 days')) AS altas_30,
@@ -678,7 +697,17 @@ function cuerpoPanel(d) {
   <p class="fecha">Datos del ${esc(dm(hoy))} a las ${esc(ahora)}
     <button class="refrescar" id="refrescar">Actualizar</button></p>
 
-  <h2>Gente adentro</h2>
+  <h2>Personas</h2>
+  <div class="cards">
+    ${tarjeta(r.personas, 'entraron de verdad', 'pusieron su nombre — este es el número de personas')}
+    ${tarjeta(r.personas_7, 'en 7 días', `${r.personas_hoy} hoy`)}
+  </div>
+  <p class="nota">Este es el número que cuenta <b>gente</b>. El de abajo cuenta
+  <b>aperturas</b>: una misma persona que mira desde Instagram, después abre en
+  su navegador y después instala la app aparece hasta tres veces ahí, porque cada
+  navegador guarda su propio código. El nombre, en cambio, se pone una sola vez.</p>
+
+  <h2>Aperturas</h2>
   <div class="cards">
     <button class="c cb" id="verGente">
       <b>${esc(r.total)}</b><span>en total</span><i>tocá para ver quiénes son ›</i>

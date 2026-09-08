@@ -3004,6 +3004,10 @@ function confirmWelcome() {
   // Recién acá arrancan sus días de prueba: este es el momento en que entró.
   arrancarPruebaSiCorresponde();
   actualizarSubUI();
+  // Y este es el momento en que pasa a contar como persona. Se avisa en segundo
+  // plano, sin esperar la respuesta: si falla o no hay internet, no se entera
+  // nadie y queda anotado la próxima vez que abra la app.
+  verificarSuscripcion().catch(() => {});
 }
 function actualizarSaludo() {
   const nombre = localStorage.getItem('tasita_nombre');
@@ -3055,13 +3059,61 @@ const INICIO_KEY = 'tasita_inicio';  // timestamp del primer uso (para la prueba
 const SUB_KEY    = 'tasita_sub';     // caché de lo que dijo el servidor
 
 // ── Identidad anónima: la app se genera sola un código. El usuario no escribe nada.
+//
+//    Si viene uno en la dirección, es porque esta misma persona acaba de saltar
+//    desde el navegador de Instagram al suyo, y se lo trae para no arrancar de
+//    cero (ver codigoDeLaURL). Eso solo puede pasar cuando todavía no hay ninguno
+//    guardado: a quien ya viene usando la app no se le toca nunca el suyo.
 function miCodigo() {
   let id = localStorage.getItem(ID_KEY);
   if (!id) {
-    id = 'tas_' + Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 6);
+    id = codigoDeLaURL() ||
+         'tas_' + Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 6);
     localStorage.setItem(ID_KEY, id);
   }
   return id;
+}
+
+// Cuánto vale el código que viaja en la dirección. Es corto a propósito: sirve
+// para el salto de un navegador al otro, que son segundos. Si ese link termina
+// pegado en un chat y alguien lo abre mañana, ya no sirve para nada y esa persona
+// arranca con el suyo propio, como corresponde.
+const MINUTOS_TRASPASO = 10;
+
+// ── El código que viene en la dirección, si es de fiar. Devuelve null ante
+//    cualquier duda: mal formado, vencido, o sin la hora del salto.
+function codigoDeLaURL() {
+  try {
+    const p = new URLSearchParams(location.search);
+    const id = p.get('id') || '';
+    const t  = parseInt(p.get('t') || '', 10);
+    if (!/^tas_[a-z0-9]{4,20}$/i.test(id)) return null;   // mismo criterio que el servidor
+    if (!t || isNaN(t)) return null;
+    if (Math.abs(Date.now() - t) > MINUTOS_TRASPASO * 60 * 1000) return null;
+    return id;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Saca el código de la barra de direcciones apenas se usó, para que no quede a la
+// vista ni se comparta sin querer. No recarga la página ni pierde nada.
+function limpiarURL() {
+  try {
+    if (!location.search) return;
+    const p = new URLSearchParams(location.search);
+    if (!p.has('id') && !p.has('t')) return;
+    p.delete('id'); p.delete('t');
+    const q = p.toString();
+    history.replaceState(null, '', location.pathname + (q ? '?' + q : '') + location.hash);
+  } catch (e) { /* si el navegador no deja, no pasa nada */ }
+}
+
+// La dirección de la app con el código adentro, para que la identidad viaje al
+// saltar de un navegador al otro.
+function urlConCodigo(base) {
+  const sep = base.includes('?') ? '&' : '?';
+  return base + sep + 'id=' + encodeURIComponent(miCodigo()) + '&t=' + Date.now();
 }
 
 // Solo lee. Devuelve null si la prueba todavía no arrancó.
@@ -3120,8 +3172,12 @@ function tieneAcceso() {
 async function verificarSuscripcion() {
   if (!PAGOS.API_URL) return null;
   try {
+    // 'activo' le dice al servidor que esta persona ya puso su nombre, o sea que
+    // entró de verdad. Es lo único que permite contar personas y no navegadores.
+    // Va colgado de una consulta que ya se hacía: ni una llamada de más.
+    const entro = localStorage.getItem('tasita_nombre') ? '&activo=1' : '';
     const r = await fetch(
-      `${PAGOS.API_URL}/suscripcion?codigo=${encodeURIComponent(miCodigo())}`,
+      `${PAGOS.API_URL}/suscripcion?codigo=${encodeURIComponent(miCodigo())}${entro}`,
       { cache: 'no-store' }
     );
     if (!r.ok) return null;
@@ -3548,7 +3604,8 @@ idsConocidos = new Set(transactions.map(t => String(t.id)));
 renderHome();
 updateFechaLabel();
 actualizarSaludo();
-miCodigo();      // genera el código anónimo la primera vez
+miCodigo();      // genera el código anónimo la primera vez (o adopta el del salto)
+limpiarURL();    // saca el código de la barra de direcciones si vino en ella
 // Quien ya venía usando la app desde la beta arranca sus días acá, la primera
 // vez que la abre con el cobro prendido. Quien es nuevo, al guardar su nombre.
 arrancarPruebaSiCorresponde();
@@ -3600,8 +3657,11 @@ function navegadorInApp() {
 //    verdad, que sí la puede instalar. Si Chrome no está en el celular,
 //    browser_fallback_url vuelve a abrir la app como si nada.
 //    En iPhone no existe equivalente: ahí hay que explicar los pasos a mano.
+//    El código viaja en la dirección para que Chrome no la trate como una
+//    persona nueva: así se lleva sus días de prueba y sus movimientos en vez de
+//    arrancar de cero.
 function urlChrome() {
-  return 'intent://' + location.host + location.pathname +
+  return 'intent://' + urlConCodigo(location.host + location.pathname) +
          '#Intent;scheme=' + location.protocol.replace(':','') +
          ';package=com.android.chrome' +
          ';S.browser_fallback_url=' + encodeURIComponent(location.href) + ';end';
@@ -3617,7 +3677,7 @@ function saltarAChrome() {
 //    esa app, así que puede no prender. Cuando no prende, avisarSiNoSalto
 //    muestra los pasos a mano, que es lo que se hacía hasta ahora.
 function urlSafari() {
-  return 'x-safari-' + location.href;
+  return 'x-safari-' + urlConCodigo(location.origin + location.pathname);
 }
 
 function saltarASafari() {
@@ -3734,7 +3794,10 @@ function abrirInstruccionesInApp(app) {
 }
 
 function copiarLinkApp() {
-  const url = 'https://presupuesto.tasita.com.ar';
+  // Con el código adentro: es la misma persona pasándose a su navegador, no
+  // quiere empezar de nuevo. Vence a los diez minutos, así que si ese link
+  // termina en un chat, para el que lo abra después es la dirección común.
+  const url = urlConCodigo('https://presupuesto.tasita.com.ar/');
   const listo = () => {
     document.getElementById('instalar-msg').textContent =
       '¡Link copiado! Pegalo en tu buscador.';
