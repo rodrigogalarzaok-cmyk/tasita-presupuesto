@@ -53,6 +53,27 @@ La tabla `usuarios` se llena sola: cada vez que alguien abre Tasita, el Worker
 anota el día (una sola escritura por persona por día, en segundo plano; si falla,
 se ignora y la app ni se entera).
 
+**Solo cuenta quien entra por la dirección real de la app.** El Worker mira el
+`Origin` del pedido: si no es `ORIGEN_APP`, la visita se anota igual pero marcada
+`interno = 1` con `origen = 'prueba'`, así que no aparece en ningún número. Eso
+deja afuera automáticamente el archivo abierto desde la computadora
+(`file:///…`, que manda `Origin: null`), las pruebas en `localhost` y cualquier
+herramienta o `curl`. A quien ya existe no se le toca la marca: un cliente real
+que un día entre por un camino raro no se cae de la cuenta, y un interno no
+vuelve solo a la cuenta.
+
+Lo que **no** se puede distinguir solo son los teléfonos propios usando la app de
+verdad: esos hay que marcarlos a mano una vez con el botón del panel. El código
+de cada equipo se ve en **Más → "Mi código"**.
+
+⚠️ **Nunca limpiar por fecha.** El 2026-09-04 se corrió
+`DELETE FROM usuarios WHERE … OR creado >= date('now','-3 hours')` para sacar
+unos residuos de prueba y se llevó puestas **todas las altas reales de ese día**
+(por eso no hay ni un alta con fecha 2026-09-04). Los que volvieron a abrir la
+app reaparecieron con la fecha corrida; los que no, se perdieron del conteo. Para
+limpiar, siempre por código exacto:
+`DELETE FROM usuarios WHERE codigo IN ('tas_…','tas_…')`.
+
 Los 40 que ya estaban antes de que esto existiera se reconstruyeron con
 `backfill-usuarios.sql`, sacando la fecha del primer movimiento que cargó cada
 uno. Esos quedan marcados con `origen = 'reconstruido'` y se muestran con un `≈`.

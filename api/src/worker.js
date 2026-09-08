@@ -23,11 +23,21 @@ export default {
 
     if (request.method === 'OPTIONS') return responder(null, 204, env);
 
+    // Solo cuenta como persona quien abre la app en su dirección real. Todo lo
+    // que llega de otro lado —el archivo abierto desde la computadora, una
+    // prueba en localhost, una herramienta— es nuestro, no un cliente: se anota
+    // igual, pero marcado como interno, así que no ensucia ningún número.
+    // El navegador siempre manda 'Origin' en un pedido a otro dominio, y este
+    // Worker vive en un dominio distinto al de la app, así que el dato llega
+    // siempre. Nada de esto se pierde: queda visible en el panel y se puede
+    // devolver a la cuenta con un toque si alguna vez fuera un cliente real.
+    const deAfuera = (request.headers.get('Origin') || '') !== env.ORIGEN_APP;
+
     // Anotar quién entró se hace SIEMPRE en segundo plano (waitUntil): la
     // respuesta a la app sale sin esperarlo y, si la anotación falla, no se
     // entera nadie. Nunca puede romper ni demorar lo que la persona está usando.
     const visita = (codigo) => {
-      if (codigo && ctx && ctx.waitUntil) ctx.waitUntil(marcarVisita(env, codigo));
+      if (codigo && ctx && ctx.waitUntil) ctx.waitUntil(marcarVisita(env, codigo, deAfuera));
     };
 
     try {
@@ -387,17 +397,21 @@ async function registrar(env, tipo, mpId, codigo, email, estado, hasta, crudo) {
 //
 //    Si algo falla acá, se ignora: es un registro para nosotros, no puede dejar
 //    a nadie sin poder usar Tasita.
-async function marcarVisita(env, codigo) {
+//    'deAfuera' = el pedido no vino de la dirección real de la app, así que
+//    somos nosotros probando. Se anota marcado como interno y no cuenta en
+//    ningún número. Al que YA existe no se le toca esa marca: si un cliente
+//    real llegara alguna vez por un camino raro, no se lo saca de la cuenta.
+async function marcarVisita(env, codigo, deAfuera) {
   const hoy = hoyISO();
   try {
     await env.DB.prepare(`
-      INSERT INTO usuarios (codigo, creado, visto, dias, origen)
-      VALUES (?, ?, ?, 1, 'vivo')
+      INSERT INTO usuarios (codigo, creado, visto, dias, origen, interno)
+      VALUES (?, ?, ?, 1, ?, ?)
       ON CONFLICT(codigo) DO UPDATE SET
         dias  = usuarios.dias + 1,
         visto = excluded.visto
       WHERE usuarios.visto < excluded.visto
-    `).bind(codigo, hoy, hoy).run();
+    `).bind(codigo, hoy, hoy, deAfuera ? 'prueba' : 'vivo', deAfuera ? 1 : 0).run();
   } catch (e) {
     console.error('No se pudo anotar la visita:', e);
   }
