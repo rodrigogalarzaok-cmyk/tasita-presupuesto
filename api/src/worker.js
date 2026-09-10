@@ -177,6 +177,17 @@ function codigoValido(c) {
   return /^tas_[a-z0-9]{4,20}$/i.test(s) ? s : null;
 }
 
+// Códigos reservados para nuestras propias pruebas (las de Claude).
+// Cualquier código que empiece con 'tas_claude' queda marcado como interno
+// entre por donde entre, incluso desde la dirección real de la app. Así una
+// prueba nuestra no aparece nunca como una persona nueva en el panel.
+// El código que se usa siempre es  tas_claudeprueba  (ver api/README.md).
+const PREFIJO_PRUEBA = /^tas_claude/i;
+
+function esCodigoDePrueba(c) {
+  return PREFIJO_PRUEBA.test(String(c || ''));
+}
+
 function emailValido(e) {
   const s = String(e || '').trim().toLowerCase();
   return s.length <= 120 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(s) ? s : null;
@@ -408,6 +419,7 @@ async function registrar(env, tipo, mpId, codigo, email, estado, hasta, crudo) {
 //    real llegara alguna vez por un camino raro, no se lo saca de la cuenta.
 async function marcarVisita(env, codigo, deAfuera, yaEntro) {
   const hoy = hoyISO();
+  const nuestro = deAfuera || esCodigoDePrueba(codigo);
   try {
     await env.DB.prepare(`
       INSERT INTO usuarios (codigo, creado, visto, dias, origen, interno, activo)
@@ -416,7 +428,16 @@ async function marcarVisita(env, codigo, deAfuera, yaEntro) {
         dias  = usuarios.dias + 1,
         visto = excluded.visto
       WHERE usuarios.visto < excluded.visto
-    `).bind(codigo, hoy, hoy, deAfuera ? 'prueba' : 'vivo', deAfuera ? 1 : 0, yaEntro ? 1 : 0).run();
+    `).bind(codigo, hoy, hoy, nuestro ? 'prueba' : 'vivo', nuestro ? 1 : 0, yaEntro ? 1 : 0).run();
+
+    // Un código reservado nunca puede quedar contando como cliente, ni siquiera
+    // si la fila se creó antes de existir esta regla o si se entró por la
+    // dirección real de la app. Es una sola escritura, y solo para los nuestros.
+    if (esCodigoDePrueba(codigo)) {
+      await env.DB
+        .prepare("UPDATE usuarios SET interno = 1, origen = 'prueba' WHERE codigo = ? AND interno = 0")
+        .bind(codigo).run();
+    }
 
     // El nombre se puede poner en cualquier momento, incluso un rato después de
     // haber abierto la app, así que la marca va aparte del INSERT de arriba (que

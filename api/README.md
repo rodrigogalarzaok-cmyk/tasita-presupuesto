@@ -66,6 +66,26 @@ Lo que **no** se puede distinguir solo son los teléfonos propios usando la app 
 verdad: esos hay que marcarlos a mano una vez con el botón del panel. El código
 de cada equipo se ve en **Más → "Mi código"**.
 
+### El código reservado para las pruebas de Claude
+
+Cualquier código que empiece con **`tas_claude`** queda marcado como interno
+entre por donde entre — incluso desde la dirección real de la app, que es el
+único caso que el `Origin` no podía distinguir. Si la fila ya existía contando
+como cliente, se corrige sola en la siguiente visita.
+
+**El código a usar siempre es `tas_claudeprueba`.** Para entrar con él, abrir:
+
+```
+https://presupuesto.tasita.com.ar/?id=tas_claudeprueba&t=<milisegundos de ahora>
+```
+
+La app lo adopta solo si ese navegador no tiene ya un código guardado, y el
+enlace vence a los 10 minutos (`MINUTOS_TRASPASO` en `index.html`), así que hay
+que generar el `t` en el momento. En una pestaña nueva funciona siempre.
+
+**Nunca probar la app en producción con un código inventado o generado al azar**:
+eso sí aparece como una persona nueva en el panel y hay que ir a limpiarlo.
+
 ### Personas vs. aperturas
 
 El panel muestra dos números distintos y **no son lo mismo**:
