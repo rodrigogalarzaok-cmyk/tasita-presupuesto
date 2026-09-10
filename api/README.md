@@ -161,6 +161,34 @@ npx wrangler d1 execute tasita --remote --command "SELECT * FROM suscripciones"
 npx wrangler d1 execute tasita --remote --command "SELECT * FROM eventos_mp ORDER BY id DESC LIMIT 10"
 ```
 
+## Cuentas libres de por vida
+
+Para los equipos de Marc y para los creadores de contenido a los que les regala
+la app a cambio de difusión. **Entran siempre y nunca ven el cartel de pago.**
+Se dan de alta con un comando por código, sin tocar la app ni publicar nada:
+
+```bash
+npx wrangler d1 execute tasita --remote --command "INSERT INTO suscripciones (codigo, activa, hasta, estado, actualizado) VALUES ('tas_xxxxxxxxxx', 1, '2099-12-31', 'libre', datetime('now')) ON CONFLICT(codigo) DO UPDATE SET activa=1, hasta='2099-12-31', estado='libre', actualizado=datetime('now')"
+```
+
+Para sacarle la cuenta libre a alguien (vuelve a la prueba/pago normal):
+
+```bash
+npx wrangler d1 execute tasita --remote --command "UPDATE suscripciones SET activa=0, estado=NULL WHERE codigo='tas_xxxxxxxxxx' AND estado='libre'"
+```
+
+**No cuentan como plata en ningún número del panel** — ni en "pagando ahora", ni
+en los mails, ni en las bajas. Tienen su propia tarjeta, *cuentas libres*, y en
+la lista aparecen etiquetadas `libre`. Esto es a propósito: el día que entren los
+pagos de verdad hay que poder distinguir cuáles son ingresos.
+
+Tampoco figuran en "pruebas que se terminan", porque no se les termina nunca.
+
+En la app, la persona ve **"Tasita libre, sin vencimiento"** en la pantalla Más,
+y si toca ahí, *"Tasita es tuya"*. Nunca se le habla de plata.
+
+El primer código libre es `tas_ls2ryzbnx4` (el celular de Marc, 2026-09-10).
+
 ## Activar a mano una suscripción
 
 Si alguien pagó y el webhook falló:

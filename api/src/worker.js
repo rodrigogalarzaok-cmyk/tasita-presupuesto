@@ -94,12 +94,18 @@ async function getSuscripcion(url, env) {
   if (!codigo) return responder({ error: 'código inválido' }, 400, env);
 
   const fila = await env.DB
-    .prepare('SELECT activa, hasta FROM suscripciones WHERE codigo = ?')
+    .prepare('SELECT activa, hasta, estado FROM suscripciones WHERE codigo = ?')
     .bind(codigo)
     .first();
 
   if (!fila || !fila.activa || !fila.hasta) {
     return responder({ activa: false }, 200, env);
+  }
+
+  // Cuenta libre de por vida (los equipos de Marc, los creadores de contenido
+  // de una promo). No paga nunca y no cuenta como pago en el panel.
+  if (fila.estado === LIBRE) {
+    return responder({ activa: true, libre: true, hasta: fila.hasta }, 200, env);
   }
 
   // Vencida: la fila queda, pero ya no da acceso.
@@ -176,6 +182,21 @@ function codigoValido(c) {
   const s = String(c || '').trim();
   return /^tas_[a-z0-9]{4,20}$/i.test(s) ? s : null;
 }
+
+// ── Cuentas libres de por vida.
+//
+//    'suscripciones.estado = libre' significa: esta persona entra siempre y
+//    nunca ve el cartel de pago. Es para los equipos de Marc y para los
+//    creadores de contenido a los que les regala la app a cambio de difusión.
+//    Se dan de alta a mano, un comando por código (ver api/README.md).
+//
+//    No cuentan como pago en NINGÚN número del panel: si contaran, el día que
+//    empiecen a entrar los pagos de verdad no se sabría cuáles son plata.
+//    Tienen su propia tarjeta ahí.
+const LIBRE = 'libre';
+
+// Para las consultas del panel: "esta suscripción no es una cuenta libre".
+const NO_LIBRE = `(s.estado IS NULL OR s.estado <> '${LIBRE}')`;
 
 // Códigos reservados para nuestras propias pruebas (las de Claude).
 // Cualquier código que empiece con 'tas_claude' queda marcado como interno
@@ -489,16 +510,21 @@ async function panel(url, env) {
         (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND visto  >= date(${HOY},'-6 days'))  AS activos_7,
         (SELECT COUNT(*) FROM usuarios WHERE interno = 0 AND visto  >= date(${HOY},'-29 days')) AS activos_30,
         (SELECT COUNT(*) FROM suscripciones s WHERE s.activa = 1 AND s.hasta >= ${HOY}
+           AND ${NO_LIBRE}
            AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS pagando,
+        -- Las regaladas de por vida van aparte: entran gratis, no son plata.
+        (SELECT COUNT(*) FROM suscripciones s WHERE s.estado = '${LIBRE}')               AS libres,
         (SELECT COUNT(*) FROM suscripciones s WHERE s.email IS NOT NULL
+           AND ${NO_LIBRE}
            AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS con_email,
         (SELECT COUNT(*) FROM suscripciones s WHERE s.email IS NOT NULL
            AND (s.activa = 0 OR s.hasta < ${HOY})
+           AND ${NO_LIBRE}
            AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS email_sin_pagar,
         -- Cancelaron pero el mes que pagaron sigue corriendo: son las bajas que
         -- vienen, y el día que se les vence bajan solas de 'pagando ahora'.
         (SELECT COUNT(*) FROM suscripciones s WHERE s.activa = 1 AND s.hasta >= ${HOY}
-           AND s.estado IS NOT NULL AND s.estado NOT IN ('al dia')
+           AND s.estado IS NOT NULL AND s.estado NOT IN ('al dia', '${LIBRE}')
            AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1))          AS cancelaron
     `),
     env.DB.prepare(`
@@ -521,7 +547,8 @@ async function panel(url, env) {
     // que usa la app de verdad de una prueba de dos toques.
     env.DB.prepare(`
       SELECT u.codigo, u.creado, u.visto, u.dias, u.origen, u.interno, s.email,
-             (s.activa = 1 AND s.hasta >= ${HOY}) AS paga,
+             (s.activa = 1 AND s.hasta >= ${HOY} AND ${NO_LIBRE}) AS paga,
+             (s.estado = '${LIBRE}') AS libre,
              (SELECT COUNT(*) FROM json_each(json_extract(d.contenido,'$.txs'))) AS movs
       FROM usuarios u
       LEFT JOIN suscripciones s ON s.codigo = u.codigo
@@ -663,6 +690,7 @@ function cuerpoPanel(d) {
   // Cuánto le queda de prueba a cada uno. Mismo cálculo que la app: 20 días
   // desde que arrancó, y nadie arrancó antes del día que se prendió el cobro.
   const prueba = (u) => {
+    if (u.libre) return '<span class="ok">libre</span>';
     if (u.paga) return '<span class="ok">paga</span>';
     const vence = sumarDias(u.creado > LANZAMIENTO ? u.creado : LANZAMIENTO, DIAS_PRUEBA);
     const quedan = Math.round((Date.parse(vence) - Date.parse(hoy)) / 86400000);
@@ -678,7 +706,8 @@ function cuerpoPanel(d) {
       <div class="pd">
         <code>${esc(u.codigo)}</code>
         ${u.interno ? '<span class="mio">nuestro</span>'
-                    : (u.paga ? '<span class="ok">paga</span>' : '')}
+                    : (u.libre ? '<span class="ok">libre</span>'
+                    : (u.paga ? '<span class="ok">paga</span>' : ''))}
         <span class="pm">se sumó ${u.origen === 'reconstruido' ? '≈' : ''}${esc(dm(u.creado))}
           · última vez ${esc(dm(u.visto))}
           · ${esc(u.movs || 0)} mov.${u.interno ? '' : ' · ' + esc(prueba(u).replace(/<[^>]+>/g, ''))}
@@ -758,6 +787,7 @@ function cuerpoPanel(d) {
     ${tarjeta(r.email_sin_pagar, 'dejaron el mail sin pagar', 'fueron a pagar y no terminaron')}
     ${tarjeta(r.con_email, 'dejaron el mail en total')}
     ${tarjeta(r.cancelaron, 'se dieron de baja', 'siguen entrando hasta que se les termine el mes que pagaron')}
+    ${tarjeta(r.libres, 'cuentas libres', 'regaladas de por vida: no pagan nunca y no cuentan como plata')}
   </div>
 
   <h2>Pruebas que se terminan</h2>

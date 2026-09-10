@@ -3151,6 +3151,8 @@ function arrancarPruebaSiCorresponde() {
 // ── Estado actual: 'activa' (pagó) | 'prueba' (le quedan días) | 'vencida'
 function estadoSuscripcion() {
   const cache = JSON.parse(localStorage.getItem(SUB_KEY) || 'null');
+  // Cuenta libre de por vida: entra siempre, no se le mira ninguna fecha.
+  if (cache && cache.libre) return { estado: 'libre' };
   if (cache && cache.hasta) {
     // 'hasta' es 'YYYY-MM-DD'. Se compara con la fecha local, nunca con UTC.
     const hoy = todayISO();
@@ -3187,7 +3189,10 @@ async function verificarSuscripcion() {
     if (!r.ok) return null;
     const sub = await r.json();
     if (sub && sub.activa && sub.hasta) {
-      localStorage.setItem(SUB_KEY, JSON.stringify({ hasta: sub.hasta }));
+      // 'libre' = cuenta regalada de por vida (equipos propios, creadores de
+      // contenido de una promo). Se guarda en el caché para que siga entrando
+      // sin internet, igual que una suscripción paga.
+      localStorage.setItem(SUB_KEY, JSON.stringify({ hasta: sub.hasta, libre: !!sub.libre }));
       return sub;
     }
     localStorage.removeItem(SUB_KEY);
@@ -3216,6 +3221,9 @@ function openSuscripcion() {
     // Beta: todavía no se cobra. No prometer días de prueba que no corren.
     document.getElementById('paywall-title').textContent = 'Gratis en beta';
     document.getElementById('paywall-sub').textContent   = 'Por ahora Tasita es gratis. Así va a ser la suscripción cuando la lancemos:';
+  } else if (s.estado === 'libre') {
+    document.getElementById('paywall-title').textContent = 'Tasita es tuya';
+    document.getElementById('paywall-sub').textContent   = 'Tenés la app completa, sin vencimiento y sin pagar nada.';
   } else if (s.estado === 'activa') {
     document.getElementById('paywall-title').textContent = 'Suscripción activa';
     document.getElementById('paywall-sub').textContent   = 'Gracias por bancar Tasita 💙 Renovación: ' + fechaLinda(s.hasta);
@@ -3359,6 +3367,7 @@ function actualizarSubUI() {
   if (lbl) {
     const s = estadoSuscripcion();
     if (!PAGOS.COBRO_ACTIVO)          lbl.textContent = 'Gratis mientras estamos en beta';
+    else if (s.estado === 'libre')    lbl.textContent = 'Tasita libre, sin vencimiento';
     else if (s.estado === 'activa')   lbl.textContent = 'Activa hasta ' + fechaLinda(s.hasta);
     // Sin cuenta regresiva: no se le recuerda a nadie que la prueba se termina.
     // El único momento en que se habla de plata es el día 20 (ver aplicarPaywall).
