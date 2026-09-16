@@ -35,9 +35,14 @@ curl -s -H "Origin: https://presupuesto.tasita.com.ar" "https://tasita-api.rodri
 quedan en otra aplicación (`application_id` 3909856389923111; la nuestra es 5520349572995061).
 El webhook no va a llegar nunca: **no perder tiempo buscando por ahí.**
 
-Hoy nos enteramos por dos caminos propios:
-- **Cron cada hora** (`sincronizarPlan`) → mirar `control_mp`:
-  - `revisado` de hace más de 2 horas → el cron no está corriendo. Ver `[triggers]` en `wrangler.toml` y redeployar.
+Hoy nos enteramos por caminos propios. La revisión (`sincronizarPlan`) corre, como mucho una vez por
+minuto (`revisarSiHaceFalta`), cada vez que llega cualquiera de estos disparadores:
+- **Reloj de GitHub cada 5 minutos**: `.github/workflows/revisar-mercadopago.yml` en `tasita-presupuesto` pega a `/revisar`. Ver corridas: `gh run list -R rodrigogalarzaok-cmyk/tasita-presupuesto --workflow revisar-mercadopago.yml`. Ojo: GitHub apaga los relojes de repos públicos tras 60 días sin commits (se reactiva desde la pestaña Actions).
+- **Alguien abre la app** (cualquier pedido a la API) y **Marc abre el panel** (ahí revisa antes de mostrar).
+- **Cron de Cloudflare** (`* * * * *`): configurado, pero el 2026-09-16 **no se ejecutaba** (0 invocaciones programadas en las estadísticas). No depender de él.
+
+Mirar `control_mp`:
+  - `revisado` de hace más de 30 minutos → ningún disparador está funcionando (el panel lo muestra en rojo). Revisar primero las corridas de GitHub.
   - `error` con texto → MP no respondió o falta el token (`MP_ACCESS_TOKEN`: si dice 401, está vencido o mal cargado; Marc lo renueva en el panel de desarrolladores y lo carga con `npx.cmd wrangler secret put MP_ACCESS_TOKEN`).
 - **Al abrir la app** una persona bloqueada que dejó email (`buscarPagoPorEmail`). En `eventos_mp` queda como `tipo = 'consulta_directa'` cuando activa a alguien.
 
