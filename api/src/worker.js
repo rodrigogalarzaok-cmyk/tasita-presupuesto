@@ -85,6 +85,11 @@ export default {
     }
 
     return responder({ error: 'no encontrado' }, 404, env);
+  },
+
+  // Cada hora: se trae de Mercado Pago quién está suscripto (ver sincronizarPlan).
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(sincronizarPlan(env));
   }
 };
 
@@ -99,6 +104,14 @@ async function getSuscripcion(url, env) {
     .first();
 
   if (!fila || !fila.activa || !fila.hasta) {
+    // Dejó su email (pasó por el camino de pago) pero el aviso de MP no llegó:
+    // se le pregunta a Mercado Pago directamente. El aviso puede no llegar nunca
+    // (pasó el 2026-09-16 con el primer pago real), así que no se depende de él.
+    const email = await env.DB.prepare('SELECT email FROM suscripciones WHERE codigo = ?').bind(codigo).first('email');
+    if (email && puedeConsultarMP(codigo)) {
+      const hasta = await buscarPagoPorEmail(env, codigo, email);
+      if (hasta && hasta >= hoyISO()) return responder({ activa: true, hasta }, 200, env);
+    }
     return responder({ activa: false }, 200, env);
   }
 
@@ -373,6 +386,94 @@ async function traerDeMP(tipo, mpId, env) {
     if (sub.recurso) return { recurso: sub.recurso, httpMP: sub.http };
   }
   return { recurso: primero.recurso, httpMP: primero.http };
+}
+
+// ── Sin depender del aviso: se le pregunta a Mercado Pago quién está suscripto.
+//
+//    El webhook es la vía rápida, pero si MP no avisa (evento sin tildar, plan
+//    creado desde el panel, caída) la persona pagó y queda afuera. Esto lo tapa
+//    por dos lados: cuando una persona bloqueada que dejó su email abre la app
+//    (buscarPagoPorEmail), y cada hora para todo el plan (sincronizarPlan, que
+//    además trae las renovaciones mensuales).
+const PLAN_MP = '95ec6d894b0a489888a142c56659f844';
+
+// Una persona bloqueada consulta varias veces seguidas al volver de pagar
+// (3, 8, 15 y 30 s). Con una consulta a MP cada 10 s por código alcanza.
+const ultimaConsultaMP = new Map();
+function puedeConsultarMP(codigo) {
+  const ahora = Date.now();
+  if (ahora - (ultimaConsultaMP.get(codigo) || 0) < 10000) return false;
+  ultimaConsultaMP.set(codigo, ahora);
+  return true;
+}
+
+async function buscarPagoPorEmail(env, codigo, email) {
+  if (!env.MP_ACCESS_TOKEN) return null;
+  const q = new URLSearchParams({ payer_email: email, preapproval_plan_id: PLAN_MP, limit: '20' });
+  const { recurso, http } = await pedirAMP(`https://api.mercadopago.com/preapproval/search?${q}`, env);
+  if (!recurso) { console.error('Búsqueda por email falló, MP', http); return null; }
+
+  const pagas = (recurso.results || []).filter(s => s.status === 'authorized');
+  console.log('Búsqueda por email', codigo, '→', (recurso.results || []).length, 'resultados,', pagas.length, 'autorizadas');
+  let mejor = null;
+  for (const s of pagas) {
+    const hasta = calcularHasta(s);
+    if (!mejor || hasta > mejor.hasta) mejor = { hasta, id: s.id };
+  }
+  if (!mejor) return null;
+
+  await registrar(env, 'consulta_directa', mejor.id, codigo, email, 'authorized', mejor.hasta, '');
+  await activarSuscripcion(env, codigo, mejor.hasta, mejor.id, email);
+  return mejor.hasta;
+}
+
+// Recorre todas las suscripciones del plan y deja la base igual a lo que dice MP.
+async function sincronizarPlan(env) {
+  if (!env.MP_ACCESS_TOKEN) return;
+  let offset = 0, total = 0, activadas = 0, sinDuenio = 0;
+  do {
+    const q = new URLSearchParams({ preapproval_plan_id: PLAN_MP, limit: '100', offset: String(offset) });
+    const { recurso, http } = await pedirAMP(`https://api.mercadopago.com/preapproval/search?${q}`, env);
+    if (!recurso) { console.error('Sincronización falló, MP', http); return; }
+    const lista = recurso.results || [];
+    total = (recurso.paging && recurso.paging.total) || lista.length;
+
+    for (const s of lista) {
+      if (s.status !== 'authorized') continue;
+      const email = emailValido(s.payer_email);
+      const hasta = calcularHasta(s);
+      let codigo = codigoValido(s.external_reference);
+      // La búsqueda por plan suele venir SIN payer_email (verificado 2026-09-16),
+      // así que a quien ya se activó alguna vez se lo reconoce por el id de su
+      // suscripción. Es lo que mantiene al día las renovaciones mensuales.
+      if (!codigo) {
+        codigo = await env.DB.prepare(
+          'SELECT codigo FROM suscripciones WHERE mp_id = ? ORDER BY activa DESC, actualizado DESC LIMIT 1'
+        ).bind(String(s.id)).first('codigo');
+      }
+      if (!codigo && email) {
+        codigo = await env.DB.prepare(
+          'SELECT codigo FROM suscripciones WHERE email = ? ORDER BY activa DESC, actualizado DESC LIMIT 1'
+        ).bind(email).first('codigo');
+      }
+      if (!codigo) {
+        // Pagó pero todavía no sabemos de quién es. Queda anotado (una vez) para
+        // que se active solo cuando esa persona deje su email.
+        sinDuenio++;
+        const ya = await env.DB.prepare('SELECT id FROM eventos_mp WHERE mp_id = ? AND hasta = ?').bind(s.id, hasta).first();
+        if (!ya) await registrar(env, 'sincronizacion', s.id, null, email, 'authorized', hasta, JSON.stringify({ payer_id: s.payer_id }));
+        continue;
+      }
+      // Solo se escribe si cambia algo: sin esto, cada hora sería una escritura por suscriptor.
+      const fila = await env.DB.prepare('SELECT activa, hasta FROM suscripciones WHERE codigo = ?').bind(codigo).first();
+      if (fila && fila.activa && fila.hasta && fila.hasta >= hasta) continue;
+      await activarSuscripcion(env, codigo, hasta, s.id, email);
+      activadas++;
+    }
+    offset += lista.length;
+    if (!lista.length) break;
+  } while (offset < total);
+  console.log('Sincronización con MP:', total, 'suscripciones en el plan,', activadas, 'activadas/extendidas,', sinDuenio, 'sin dueño');
 }
 
 async function pedirAMP(endpoint, env) {

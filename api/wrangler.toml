@@ -1,4 +1,4 @@
-name = "tasita-api"
+﻿name = "tasita-api"
 main = "src/worker.js"
 compatibility_date = "2026-08-12"
 
@@ -7,6 +7,11 @@ compatibility_date = "2026-08-12"
 binding = "DB"
 database_name = "tasita"
 database_id = "ceb2843f-f209-4f57-b4b8-8197124a9b7d"
+
+# Cada hora el Worker le pregunta a Mercado Pago quién está suscripto, por si
+# algún aviso (webhook) no llegó. Ver sincronizarPlan() en worker.js.
+[triggers]
+crons = ["7 * * * *"]
 
 [vars]
 # Origen permitido para llamar a la API desde el navegador.
