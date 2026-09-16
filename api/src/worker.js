@@ -267,6 +267,12 @@ async function registrarEmail(request, env) {
     await activarSuscripcion(env, codigo, ev.hasta, ev.mp_id, email);
     return responder({ activa: true, hasta: ev.hasta }, 200, env);
   }
+
+  // Si no quedó anotado, se le pregunta a MP en el momento. Sin esto, quien
+  // corrige el email después de haber pagado con otro (antes de la revisión de
+  // cada hora) recibe "no pagó" y la app lo manda a pagar DE NUEVO: cobro doble.
+  const hasta = await buscarPagoPorEmail(env, codigo, email);
+  if (hasta && hasta >= hoyISO()) return responder({ activa: true, hasta }, 200, env);
   return responder({ activa: false }, 200, env);
 }
 
