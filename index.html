@@ -3608,6 +3608,15 @@ function esperarElPagoReciente() {
   }, ms));
 }
 
+// Y mientras siga frente al cartel de pago (después de haber ido a pagar), se
+// vuelve a preguntar cada 20 segundos. Así, si el pago tarda en aparecer, el
+// cartel se cierra solo aunque la persona no toque nada ni cambie de pantalla.
+setInterval(() => {
+  if (!PAGOS.COBRO_ACTIVO || !emailGuardado() || document.visibilityState !== 'visible') return;
+  const ov = document.getElementById('paywall-overlay');
+  if (ov && ov.classList.contains('open')) revisarPagoAlVolver();
+}, 20000);
+
 // ════════════════════════════════════════
 //  INIT
 // ════════════════════════════════════════

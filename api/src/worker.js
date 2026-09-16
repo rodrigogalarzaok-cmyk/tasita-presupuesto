@@ -456,6 +456,7 @@ async function sincronizarPlan(env) {
   if (!env.MP_ACCESS_TOKEN) { control.error = 'falta MP_ACCESS_TOKEN'; return guardarControl(env, control); }
 
   let offset = 0, total = 0;
+  const pendientes = [];   // pagaron y no coinciden por id ni por email
   do {
     const q = new URLSearchParams({ preapproval_plan_id: PLAN_MP, limit: '100', offset: String(offset) });
     const { recurso, http } = await pedirAMP(`https://api.mercadopago.com/preapproval/search?${q}`, env);
@@ -508,11 +509,9 @@ async function sincronizarPlan(env) {
       }
       if (!codigo) {
         // Pagó pero no sabemos de quién es (lo más probable: en la app escribió un
-        // email distinto al de su cuenta de MP). Queda anotado para que se active
-        // solo si carga el email correcto, y el panel lo muestra en rojo.
-        control.sin_duenio.push({ mp_id: s.id, email, desde: soloFecha(s.date_created || ''), hasta });
-        const ya = await env.DB.prepare('SELECT id FROM eventos_mp WHERE mp_id = ? AND hasta = ?').bind(s.id, hasta).first();
-        if (!ya) await registrar(env, 'sincronizacion', s.id, null, email, 'authorized', hasta, JSON.stringify({ payer_id: s.payer_id }));
+        // email distinto al de su cuenta de MP). Se intenta por horario después
+        // de recorrer todo el plan (ver abajo).
+        pendientes.push({ s, email, hasta });
         continue;
       }
       control.ok++;
@@ -525,6 +524,42 @@ async function sincronizarPlan(env) {
     offset += lista.length;
     if (!lista.length) break;
   } while (offset < total);
+
+  // ── Pagos sin dueño: se reconocen por horario, sin que nadie toque nada.
+  //    Para pagar, la persona primero deja su email en la app (eso guarda la
+  //    hora en 'actualizado') y enseguida paga en MP. Si en la hora previa a la
+  //    suscripción (o 10 min después, por relojes) hay UNA sola persona que dejó
+  //    su email y nunca pagó, y no hay otro pago sin dueño en esa misma franja,
+  //    es ella. Si hay dudas (dos candidatas, o dos pagos), no se adivina: queda
+  //    en rojo en el panel para mirarlo.
+  for (const p of pendientes) {
+    const t = Date.parse(p.s.date_created || '');
+    let codigo = null;
+    if (!isNaN(t)) {
+      const competidores = pendientes.filter(o => Math.abs(Date.parse(o.s.date_created || '') - t) < 70 * 60000).length;
+      if (competidores === 1) {
+        const { results } = await env.DB.prepare(`
+          SELECT codigo FROM suscripciones
+          WHERE email IS NOT NULL AND mp_id IS NULL AND (activa = 0 OR activa IS NULL)
+            AND (estado IS NULL OR estado <> '${LIBRE}')
+            AND actualizado BETWEEN ? AND ?
+          LIMIT 2
+        `).bind(new Date(t - 60 * 60000).toISOString(), new Date(t + 10 * 60000).toISOString()).all();
+        if (results && results.length === 1) codigo = results[0].codigo;
+      }
+    }
+    if (codigo) {
+      await registrar(env, 'asignado_por_horario', p.s.id, codigo, p.email, 'authorized', p.hasta, '');
+      await activarSuscripcion(env, codigo, p.hasta, p.s.id, p.email);
+      control.ok++;
+      control.activadas++;
+      continue;
+    }
+    control.sin_duenio.push({ mp_id: p.s.id, email: p.email, desde: soloFecha(p.s.date_created || ''), hasta: p.hasta });
+    const ya = await env.DB.prepare('SELECT id FROM eventos_mp WHERE mp_id = ? AND hasta = ?').bind(p.s.id, p.hasta).first();
+    if (!ya) await registrar(env, 'sincronizacion', p.s.id, null, p.email, 'authorized', p.hasta, JSON.stringify({ payer_id: p.s.payer_id }));
+  }
+
   console.log('Sincronización con MP:', JSON.stringify(control));
   return guardarControl(env, control);
 }
