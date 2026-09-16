@@ -104,6 +104,11 @@ Si pagó desde uno y abre otro, ese otro no tiene suscripción.
 ## 6. Le cobraron y se dio de baja / pidió devolución
 
 - Canceló: **sigue entrando hasta que termina el mes pagado** (decisión de Marc). No es un error.
+- **Cómo nos enteramos de una baja:** MP no avisa, así que la revisión de cada hora también mira las
+  suscripciones que ya no están activas (`cancelled`, `paused`) y anota el estado en `suscripciones.estado`
+  (buscando por `mp_id`, así una baja vieja no pisa una suscripción nueva). En el panel: tarjeta
+  "se dieron de baja" y, en la tabla "Quién / Paga hasta", la etiqueta roja "se dio de baja".
+  Tarda como mucho una hora en aparecer. Agregado el 2026-09-16.
 - Contracargo o devolución (`charged_back`, `refunded`, `cancelled_by_chargeback`): se corta en el momento.
 
 ---

@@ -455,7 +455,20 @@ async function sincronizarPlan(env) {
     control.en_mp = total;
 
     for (const s of lista) {
-      if (s.status !== 'authorized') continue;
+      if (s.status !== 'authorized') {
+        // Se dio de baja (cancelled) o la pausó (paused). Como MP no avisa, es la
+        // única forma de enterarnos. NO se le corta el acceso: el mes que pagó
+        // se respeta y se vence solo. Solo se anota el estado para el panel.
+        // Se busca por el id de ESTA suscripción: si la persona se volvió a
+        // suscribir, su fila ya apunta a la nueva y la vieja cancelada no la pisa.
+        if (s.status) {
+          await env.DB.prepare(`
+            UPDATE suscripciones SET estado = ?, actualizado = ?
+            WHERE mp_id = ? AND (estado IS NULL OR estado <> ?) AND estado IS NOT '${LIBRE}'
+          `).bind(s.status, new Date().toISOString(), String(s.id), s.status).run();
+        }
+        continue;
+      }
       control.autorizadas++;
       let email = emailValido(s.payer_email);
       const hasta = calcularHasta(s);
@@ -828,6 +841,16 @@ function esc(v) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Lo que informa Mercado Pago, dicho como lo diría Marc.
+const ESTADOS_MP = {
+  cancelled: 'se dio de baja',
+  paused: 'pausó la suscripción',
+  pending: 'pago pendiente',
+  charged_back: 'contracargo',
+  refunded: 'le devolvieron la plata',
+  cancelled_by_chargeback: 'contracargo'
+};
+
 function cuerpoPanel(d) {
   const r = d.resumen;
   const hoy = hoyISO();
@@ -930,7 +953,7 @@ function cuerpoPanel(d) {
 
   const filasPagos = d.pagos.length
     ? d.pagos.map(p => `<tr><td>${esc(p.email || p.codigo)}</td><td>${esc(dm(p.hasta))}</td>
-        <td class="g">${p.hasta < hoy ? '<span class="fin">venció</span>' : (p.estado && p.estado !== 'al dia' ? esc(p.estado) : 'al día')}</td></tr>`).join('')
+        <td class="g">${p.hasta < hoy ? '<span class="fin">venció</span>' : (p.estado && p.estado !== 'al dia' ? `<span class="fin">${esc(ESTADOS_MP[p.estado] || p.estado)}</span>` : 'al día')}</td></tr>`).join('')
     : '<tr><td colspan="3" class="g">Todavía no paga nadie.</td></tr>';
 
   return `
