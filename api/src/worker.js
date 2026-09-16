@@ -45,7 +45,19 @@ export default {
       if (codigo && ctx && ctx.waitUntil) ctx.waitUntil(marcarVisita(env, codigo, deAfuera, yaEntro));
     };
 
+    // Revisión con Mercado Pago "de arrastre": cualquier pedido que llega (alguien
+    // abre la app, el panel, el reloj externo de GitHub) la dispara en segundo
+    // plano si la última tiene más de un minuto. Así no depende de un solo reloj:
+    // el cron de Cloudflare quedó configurado pero el 2026-09-16 no se ejecutaba.
+    if (ctx && ctx.waitUntil && url.pathname !== '/webhook-mp' && url.pathname !== '/panel') {
+      ctx.waitUntil(revisarSiHaceFalta(env).catch(e => console.error('revisión de arrastre:', e)));
+    }
+
     try {
+      if (url.pathname === '/revisar') {
+        // Lo llama el reloj externo (GitHub Actions). No devuelve datos de nadie.
+        return responder({ ok: true }, 200, env);
+      }
       if (url.pathname === '/suscripcion' && request.method === 'GET') {
         visita(codigoValido(url.searchParams.get('codigo')));
         return await getSuscripcion(url, env);
@@ -87,9 +99,9 @@ export default {
     return responder({ error: 'no encontrado' }, 404, env);
   },
 
-  // Cada hora: se trae de Mercado Pago quién está suscripto (ver sincronizarPlan).
+  // Cron de Cloudflare (cada minuto). Es uno de los disparadores; ver revisarSiHaceFalta.
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(sincronizarPlan(env));
+    ctx.waitUntil(revisarSiHaceFalta(env));
   }
 };
 
@@ -515,6 +527,23 @@ async function sincronizarPlan(env) {
   return guardarControl(env, control);
 }
 
+// Corre la revisión solo si la última tiene más de SEGUNDOS_ENTRE_REVISIONES.
+// Primero "reserva" el turno con un UPDATE condicional: si llegan diez pedidos
+// juntos, uno solo gana y los demás no le pegan a Mercado Pago.
+const SEGUNDOS_ENTRE_REVISIONES = 60;
+async function revisarSiHaceFalta(env) {
+  const ahora = new Date();
+  const limite = new Date(ahora.getTime() - SEGUNDOS_ENTRE_REVISIONES * 1000).toISOString();
+  let r = await env.DB.prepare('UPDATE control_mp SET revisado = ? WHERE id = 1 AND revisado < ?')
+    .bind(ahora.toISOString(), limite).run();
+  if (!r.meta || !r.meta.changes) {
+    // Puede que la fila todavía no exista (base nueva).
+    r = await env.DB.prepare("INSERT OR IGNORE INTO control_mp (id, revisado) VALUES (1, ?)").bind(ahora.toISOString()).run();
+    if (!r.meta || !r.meta.changes) return null;
+  }
+  return sincronizarPlan(env);
+}
+
 async function guardarControl(env, c) {
   try {
     await env.DB.prepare(`
@@ -657,6 +686,10 @@ async function panel(url, env) {
   if ((url.searchParams.get('clave') || '') !== env.CLAVE_PANEL) {
     return pagina('Clave incorrecta', 'El link tiene que terminar en <code>?clave=…</code>', 401);
   }
+
+  // Al abrir el panel se revisa con Mercado Pago ANTES de mostrar nada (si la
+  // última revisión tiene más de un minuto): Marc siempre ve lo del momento.
+  try { await revisarSiHaceFalta(env); } catch (e) { console.error('revisión al abrir el panel:', e); }
 
   // 'now' es UTC; Argentina está tres horas atrás. Mismo criterio que el resto.
   const HOY = "date('now','-3 hours')";
@@ -940,7 +973,9 @@ function cuerpoPanel(d) {
   const problemas = [];
   if (!c) problemas.push('La revisión con Mercado Pago todavía no corrió nunca.');
   else {
-    if (minutos > 150) problemas.push(`La revisión con Mercado Pago no corre desde hace ${Math.round(minutos / 60)} horas.`);
+    // La disparan el reloj externo (cada ~5 min), cada apertura de la app y
+    // cada vez que se abre este panel. Media hora sin correr ya es un problema.
+    if (minutos > 30) problemas.push(`La revisión con Mercado Pago no corre desde hace ${minutos < 120 ? minutos + ' minutos' : Math.round(minutos / 60) + ' horas'}.`);
     if (c.error) problemas.push(`La última revisión falló: ${c.error}.`);
     for (const p of sinDuenio) {
       problemas.push(`Alguien pagó en Mercado Pago el ${dm(p.desde)}${p.email ? ` (${p.email})` : ''} y no sabemos cuál es su app: seguramente escribió otro email. Pasáselo a Claude para activarlo.`);
