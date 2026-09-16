@@ -86,6 +86,20 @@ CREATE INDEX IF NOT EXISTS idx_usuarios_creado ON usuarios (creado);
 
 CREATE INDEX IF NOT EXISTS idx_usuarios_visto ON usuarios (visto);
 
+-- ── Cómo salió la última revisión con Mercado Pago (una sola fila, id = 1).
+--    La escribe el cron de cada hora y la muestra el panel arriba de todo:
+--    si deja de correr o alguien pagó y no tiene acceso, se ve en rojo.
+CREATE TABLE IF NOT EXISTS control_mp (
+  id          INTEGER PRIMARY KEY,
+  revisado    TEXT NOT NULL,          -- ISO UTC
+  en_mp       INTEGER,                -- suscripciones del plan en MP (cualquier estado)
+  autorizadas INTEGER,                -- las que están cobrando
+  ok          INTEGER,                -- autorizadas que reconocimos en la base
+  activadas   INTEGER,                -- activadas o extendidas en esta pasada
+  sin_duenio  TEXT,                   -- JSON: pagaron y no sabemos de quién son
+  error       TEXT
+);
+
 -- ── Migraciones aplicadas sobre la base que ya estaba en producción.
 --    Arriba están dentro del CREATE TABLE (para una base nueva); acá quedan
 --    anotadas como referencia de lo que se corrió a mano y cuándo. SQLite no

@@ -103,16 +103,18 @@ async function getSuscripcion(url, env) {
     .bind(codigo)
     .first();
 
-  if (!fila || !fila.activa || !fila.hasta) {
-    // Dejó su email (pasó por el camino de pago) pero el aviso de MP no llegó:
-    // se le pregunta a Mercado Pago directamente. El aviso puede no llegar nunca
-    // (pasó el 2026-09-16 con el primer pago real), así que no se depende de él.
+  // Sin pago, o con el mes vencido: si dejó su email (pasó por el camino de
+  // pago) se le pregunta a Mercado Pago directamente antes de decir que no.
+  // El aviso de MP puede no llegar nunca (pasó el 2026-09-16 con el primer pago
+  // real), y una renovación puede cobrarse entre dos revisiones de cada hora.
+  const sinAcceso = !fila || !fila.activa || !fila.hasta || (fila.estado !== LIBRE && fila.hasta < hoyISO());
+  if (sinAcceso) {
     const email = await env.DB.prepare('SELECT email FROM suscripciones WHERE codigo = ?').bind(codigo).first('email');
     if (email && puedeConsultarMP(codigo)) {
       const hasta = await buscarPagoPorEmail(env, codigo, email);
       if (hasta && hasta >= hoyISO()) return responder({ activa: true, hasta }, 200, env);
     }
-    return responder({ activa: false }, 200, env);
+    return responder(fila && fila.hasta ? { activa: false, hasta: fila.hasta } : { activa: false }, 200, env);
   }
 
   // Cuenta libre de por vida (los equipos de Marc, los creadores de contenido
@@ -120,9 +122,6 @@ async function getSuscripcion(url, env) {
   if (fila.estado === LIBRE) {
     return responder({ activa: true, libre: true, hasta: fila.hasta }, 200, env);
   }
-
-  // Vencida: la fila queda, pero ya no da acceso.
-  if (fila.hasta < hoyISO()) return responder({ activa: false, hasta: fila.hasta }, 200, env);
 
   return responder({ activa: true, hasta: fila.hasta }, 200, env);
 }
@@ -428,19 +427,31 @@ async function buscarPagoPorEmail(env, codigo, email) {
 }
 
 // Recorre todas las suscripciones del plan y deja la base igual a lo que dice MP.
+//
+// Cada pasada deja anotado en 'control_mp' cómo le fue. Eso es lo que muestra
+// el panel arriba de todo: si la revisión dejó de correr, o si hay alguien que
+// pagó en MP y no tiene acceso, se ve en rojo sin tener que esperar un reclamo.
 async function sincronizarPlan(env) {
-  if (!env.MP_ACCESS_TOKEN) return;
-  let offset = 0, total = 0, activadas = 0, sinDuenio = 0;
+  const control = { revisado: new Date().toISOString(), ok: 0, en_mp: 0, autorizadas: 0, activadas: 0, sin_duenio: [], error: null };
+  if (!env.MP_ACCESS_TOKEN) { control.error = 'falta MP_ACCESS_TOKEN'; return guardarControl(env, control); }
+
+  let offset = 0, total = 0;
   do {
     const q = new URLSearchParams({ preapproval_plan_id: PLAN_MP, limit: '100', offset: String(offset) });
     const { recurso, http } = await pedirAMP(`https://api.mercadopago.com/preapproval/search?${q}`, env);
-    if (!recurso) { console.error('Sincronización falló, MP', http); return; }
+    if (!recurso) {
+      console.error('Sincronización falló, MP', http);
+      control.error = `Mercado Pago no respondió (${http})`;
+      return guardarControl(env, control);
+    }
     const lista = recurso.results || [];
     total = (recurso.paging && recurso.paging.total) || lista.length;
+    control.en_mp = total;
 
     for (const s of lista) {
       if (s.status !== 'authorized') continue;
-      const email = emailValido(s.payer_email);
+      control.autorizadas++;
+      let email = emailValido(s.payer_email);
       const hasta = calcularHasta(s);
       let codigo = codigoValido(s.external_reference);
       // La búsqueda por plan suele venir SIN payer_email (verificado 2026-09-16),
@@ -451,29 +462,53 @@ async function sincronizarPlan(env) {
           'SELECT codigo FROM suscripciones WHERE mp_id = ? ORDER BY activa DESC, actualizado DESC LIMIT 1'
         ).bind(String(s.id)).first('codigo');
       }
+      // Alguien nuevo que no reconocemos por id: la búsqueda no trae el email,
+      // pero la suscripción de a una sí. Solo se pide para estos casos.
+      if (!codigo && !email) {
+        const det = await pedirAMP(`https://api.mercadopago.com/preapproval/${s.id}`, env);
+        if (det.recurso) email = emailValido(det.recurso.payer_email);
+      }
       if (!codigo && email) {
         codigo = await env.DB.prepare(
           'SELECT codigo FROM suscripciones WHERE email = ? ORDER BY activa DESC, actualizado DESC LIMIT 1'
         ).bind(email).first('codigo');
       }
       if (!codigo) {
-        // Pagó pero todavía no sabemos de quién es. Queda anotado (una vez) para
-        // que se active solo cuando esa persona deje su email.
-        sinDuenio++;
+        // Pagó pero no sabemos de quién es (lo más probable: en la app escribió un
+        // email distinto al de su cuenta de MP). Queda anotado para que se active
+        // solo si carga el email correcto, y el panel lo muestra en rojo.
+        control.sin_duenio.push({ mp_id: s.id, email, desde: soloFecha(s.date_created || ''), hasta });
         const ya = await env.DB.prepare('SELECT id FROM eventos_mp WHERE mp_id = ? AND hasta = ?').bind(s.id, hasta).first();
         if (!ya) await registrar(env, 'sincronizacion', s.id, null, email, 'authorized', hasta, JSON.stringify({ payer_id: s.payer_id }));
         continue;
       }
+      control.ok++;
       // Solo se escribe si cambia algo: sin esto, cada hora sería una escritura por suscriptor.
       const fila = await env.DB.prepare('SELECT activa, hasta FROM suscripciones WHERE codigo = ?').bind(codigo).first();
       if (fila && fila.activa && fila.hasta && fila.hasta >= hasta) continue;
       await activarSuscripcion(env, codigo, hasta, s.id, email);
-      activadas++;
+      control.activadas++;
     }
     offset += lista.length;
     if (!lista.length) break;
   } while (offset < total);
-  console.log('Sincronización con MP:', total, 'suscripciones en el plan,', activadas, 'activadas/extendidas,', sinDuenio, 'sin dueño');
+  console.log('Sincronización con MP:', JSON.stringify(control));
+  return guardarControl(env, control);
+}
+
+async function guardarControl(env, c) {
+  try {
+    await env.DB.prepare(`
+      INSERT INTO control_mp (id, revisado, en_mp, autorizadas, ok, activadas, sin_duenio, error)
+      VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET revisado = excluded.revisado, en_mp = excluded.en_mp,
+        autorizadas = excluded.autorizadas, ok = excluded.ok, activadas = excluded.activadas,
+        sin_duenio = excluded.sin_duenio, error = excluded.error
+    `).bind(c.revisado, c.en_mp, c.autorizadas, c.ok, c.activadas, JSON.stringify(c.sin_duenio), c.error).run();
+  } catch (e) {
+    console.error('No se pudo guardar el control:', e);
+  }
+  return c;
 }
 
 async function pedirAMP(endpoint, env) {
@@ -492,7 +527,12 @@ async function pedirAMP(endpoint, env) {
 
 // ── Hasta cuándo vale el acceso.
 function calcularHasta(recurso) {
-  // Suscripción: MP dice cuándo cobra la próxima cuota.
+  // Suscripción: un mes desde el último cobro que MP efectivamente hizo.
+  // No se usa 'next_payment_date' si hay cobro registrado: esa fecha dice cuándo
+  // MP VA a intentar cobrar, no que cobró. Así, si la renovación falla, el
+  // acceso termina al mes (más la gracia) y vuelve solo cuando MP logra cobrar.
+  const cobro = recurso.summarized && recurso.summarized.last_charged_date;
+  if (cobro) return sumarDias(sumarUnMes(soloFecha(cobro)), DIAS_GRACIA);
   if (recurso.next_payment_date) return sumarDias(soloFecha(recurso.next_payment_date), DIAS_GRACIA);
   // Pago suelto: un mes desde que se aprobó.
   const base = soloFecha(recurso.date_approved || recurso.date_created || new Date().toISOString());
@@ -500,6 +540,14 @@ function calcularHasta(recurso) {
 }
 
 function soloFecha(iso) { return String(iso).slice(0, 10); }
+
+// '2026-09-15' → '2026-10-15'. Si el mes siguiente no tiene ese día (31/01), cae en el último.
+function sumarUnMes(iso) {
+  const [a, m, d] = iso.split('-').map(Number);
+  const ultimo = new Date(Date.UTC(a, m + 1, 0)).getUTCDate();
+  const f = new Date(Date.UTC(a, m, Math.min(d, ultimo)));
+  return [f.getUTCFullYear(), String(f.getUTCMonth() + 1).padStart(2, '0'), String(f.getUTCDate()).padStart(2, '0')].join('-');
+}
 
 function sumarDias(iso, dias) {
   const [a, m, d] = iso.split('-').map(Number);
@@ -595,7 +643,7 @@ async function panel(url, env) {
   const HOY = "date('now','-3 hours')";
 
   // 'interno = 0' en todos lados: los equipos nuestros no cuentan como clientes.
-  const [resumen, altas, vencen, ultimos, eventos] = await env.DB.batch([
+  const [resumen, altas, vencen, ultimos, eventos, control, pagos] = await env.DB.batch([
     env.DB.prepare(`
       SELECT
         (SELECT COUNT(*) FROM usuarios WHERE interno = 0)                                AS total,
@@ -662,6 +710,15 @@ async function panel(url, env) {
     env.DB.prepare(`
       SELECT substr(datetime(recibido,'-3 hours'),1,16) AS cuando, tipo, email, estado, hasta
       FROM eventos_mp ORDER BY id DESC LIMIT 8
+    `),
+    env.DB.prepare('SELECT * FROM control_mp WHERE id = 1'),
+    // Los que pagan: cuándo se les termina el mes pagado. Si MP cobra la
+    // renovación, la revisión de cada hora corre esta fecha un mes para adelante.
+    env.DB.prepare(`
+      SELECT s.codigo, s.email, s.hasta, s.estado FROM suscripciones s
+      WHERE s.activa = 1 AND s.hasta >= date(${HOY},'-7 days') AND ${NO_LIBRE}
+        AND s.codigo NOT IN (SELECT codigo FROM usuarios WHERE interno = 1)
+      ORDER BY s.hasta
     `)
   ]);
 
@@ -671,7 +728,9 @@ async function panel(url, env) {
     altas:   altas.results   || [],
     vencen:  vencen.results  || [],
     ultimos: ultimos.results || [],
-    eventos: eventos.results || []
+    eventos: eventos.results || [],
+    control: (control.results && control.results[0]) || null,
+    pagos:   pagos.results   || []
   };
 
   if (url.searchParams.get('json') !== null) {
@@ -843,10 +902,37 @@ function cuerpoPanel(d) {
   // Hora de Argentina, para que se vea de cuándo son los números que está mirando.
   const ahora = new Date(Date.now() - 3 * 3600000).toISOString().slice(11, 16);
 
+  // ── ¿Los cobros de Mercado Pago están llegando bien?
+  //    Verde = la revisión de cada hora corrió hace poco y todo el que paga en MP
+  //    tiene acceso en la app. Rojo = hay que mirar, con el motivo en criollo.
+  const c = d.control;
+  const minutos = c ? Math.round((Date.now() - Date.parse(c.revisado)) / 60000) : null;
+  const sinDuenio = c ? JSON.parse(c.sin_duenio || '[]') : [];
+  const problemas = [];
+  if (!c) problemas.push('La revisión con Mercado Pago todavía no corrió nunca.');
+  else {
+    if (minutos > 150) problemas.push(`La revisión con Mercado Pago no corre desde hace ${Math.round(minutos / 60)} horas.`);
+    if (c.error) problemas.push(`La última revisión falló: ${c.error}.`);
+    for (const p of sinDuenio) {
+      problemas.push(`Alguien pagó en Mercado Pago el ${dm(p.desde)}${p.email ? ` (${p.email})` : ''} y no sabemos cuál es su app: seguramente escribió otro email. Pasáselo a Claude para activarlo.`);
+    }
+  }
+  const hace = minutos === null ? '' : minutos < 2 ? 'recién' : minutos < 60 ? `hace ${minutos} min` : `hace ${Math.round(minutos / 60)} h`;
+  const estadoCobros = problemas.length
+    ? `<div class="estado mal"><b>Hay que revisar</b>${problemas.map(esc).join('<br>')}</div>`
+    : `<div class="estado bien"><b>Cobros en orden</b>Revisado con Mercado Pago ${esc(hace)}: ${esc(c.autorizadas)} ${c.autorizadas === 1 ? 'suscripción activa' : 'suscripciones activas'} en MP, todas con acceso en la app.</div>`;
+
+  const filasPagos = d.pagos.length
+    ? d.pagos.map(p => `<tr><td>${esc(p.email || p.codigo)}</td><td>${esc(dm(p.hasta))}</td>
+        <td class="g">${p.hasta < hoy ? '<span class="fin">venció</span>' : (p.estado && p.estado !== 'al dia' ? esc(p.estado) : 'al día')}</td></tr>`).join('')
+    : '<tr><td colspan="3" class="g">Todavía no paga nadie.</td></tr>';
+
   return `
   <h1>Tasita Presupuesto</h1>
   <p class="fecha">Datos del ${esc(dm(hoy))} a las ${esc(ahora)}
     <button class="refrescar" id="refrescar">Actualizar</button></p>
+
+  ${estadoCobros}
 
   <h2>Personas</h2>
   <div class="cards">
@@ -890,6 +976,11 @@ function cuerpoPanel(d) {
     ${tarjeta(r.cancelaron, 'se dieron de baja', 'siguen entrando hasta que se les termine el mes que pagaron')}
     ${tarjeta(r.libres, 'cuentas libres', 'regaladas de por vida: no pagan nunca y no cuentan como plata')}
   </div>
+  <p class="nota"><b>Quiénes pagan y hasta cuándo.</b> La fecha es el fin del mes
+  pagado más 3 días de margen. Cuando Mercado Pago cobra la renovación, en menos
+  de una hora esa fecha pasa al mes siguiente. Si llega el día del cobro y no
+  cambió, es que MP no pudo cobrarle.</p>
+  <div class="tabla"><table><tr><th>Quién</th><th>Paga hasta</th><th></th></tr>${filasPagos}</table></div>
 
   <h2>Pruebas que se terminan</h2>
   <p class="nota">Estimado: el reloj de los 20 días corre en el celular de cada
@@ -1028,7 +1119,13 @@ td.n{font-weight:600}
 code{font-size:12px;background:#f0f1f3;border-radius:4px;padding:1px 4px}
 .nota{font-size:13px;color:#6b7280;margin:8px 0}
 .vacio{color:#6b7280;margin:0;font-size:14px}
+.estado{border-radius:12px;padding:12px 14px;font-size:14px;line-height:1.45;border:1px solid}
+.estado b{display:block;font-size:16px;margin-bottom:2px}
+.estado.bien{background:#e7f4ee;color:#1f5c43;border-color:#c5e6d6}
+.estado.mal{background:#fdeceb;color:#8f2a22;border-color:#f5c9c5}
 @media (prefers-color-scheme:dark){
+  .estado.bien{background:#16301f;color:#9fdcbc;border-color:#24503a}
+  .estado.mal{background:#341c1a;color:#f2aaa3;border-color:#5a2d29}
   body{background:#0f1115;color:#e8eaed}
   .c,.tabla,.barras,.gente{background:#181b21;border-color:#2a2f38}
   .p{border-color:#242832}
