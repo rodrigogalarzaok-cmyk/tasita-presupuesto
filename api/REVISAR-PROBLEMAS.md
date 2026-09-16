@@ -65,6 +65,10 @@ Cómo se reconoce un pago: al tocar "Suscribirme" la app guarda un email pegado 
   npx.cmd wrangler d1 execute tasita --remote --json --command "SELECT codigo, email, actualizado FROM suscripciones WHERE activa = 0 AND email IS NOT NULL ORDER BY actualizado DESC LIMIT 20;"
   ```
   Típico: una letra de menos, o hotmail en Tasita y gmail en MP.
+- **Desde el 2026-09-16 casi siempre se resuelve solo, por horario** (`asignado_por_horario` en `eventos_mp`):
+  si en la hora previa a la suscripción UNA sola persona dejó su email sin pagar (`mp_id IS NULL`) y no hay
+  otro pago sin dueño en ±70 min, se le asigna. Solo queda en rojo si hay dos candidatas o dos pagos juntos.
+  Si alguna vez se asignara mal: mover con el UPDATE de abajo y avisar a Marc.
 - Arreglo sin tocar nada: que la persona toque "Suscribirme" y escriba el email de MP → entra sola
   (el servidor le pregunta a MP en ese momento).
 - Arreglo a mano (con el código correcto y confirmado con Marc):
@@ -103,7 +107,7 @@ Si pagó desde uno y abre otro, ese otro no tiene suscripción.
 
 ## 5. El servidor dice activa:true pero la app sigue bloqueada
 
-- La app guarda el estado en el celular y lo revalida al abrir y al volver a la pantalla (`verificarSuscripcion`, `revisarPagoAlVolver`). Primero: **cerrar la app del todo y abrirla con internet.**
+- La app guarda el estado en el celular y lo revalida al abrir, al volver a la pantalla (`verificarSuscripcion`, `revisarPagoAlVolver`) y **cada 20 s mientras el cartel de pago está abierto** si ya dejó su email (verificado en producción: se cerró solo a los 18 s). Primero: **cerrar la app del todo y abrirla con internet.**
 - Si igual no: probar en el navegador con el código reservado `tas_claudeprueba` reproduciendo su estado (ver `feedback_tasita_codigo_pruebas`). Nunca entrar con el código del cliente (son sus datos).
 - Si tocó "Ya pagué" varias veces seguidas: el servidor consulta a MP como mucho cada 10 s por código. Esperar y volver a abrir.
 
