@@ -1,0 +1,23 @@
+# Reloj de Tasita: cada minuto le pide a tasita-api que revise con Mercado Pago
+# (altas, renovaciones, bajas). Existe aparte porque los cron de Cloudflare no se
+# ejecutaban en esta cuenta (2026-09-16: 0 invocaciones programadas). Usa un
+# "despertador" de Durable Object que se reprograma solo; el cron queda de más.
+name = "tasita-reloj"
+main = "src/index.js"
+compatibility_date = "2026-08-12"
+workers_dev = true
+
+[triggers]
+crons = ["* * * * *"]
+
+[[services]]
+binding = "API"
+service = "tasita-api"
+
+[[durable_objects.bindings]]
+name = "RELOJ"
+class_name = "Reloj"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Reloj"]

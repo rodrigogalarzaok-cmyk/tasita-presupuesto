@@ -47,8 +47,10 @@ export default {
 
     // Revisión con Mercado Pago "de arrastre": cualquier pedido que llega (alguien
     // abre la app, el panel, el reloj externo de GitHub) la dispara en segundo
-    // plano si la última tiene más de un minuto. Así no depende de un solo reloj:
-    // el cron de Cloudflare quedó configurado pero el 2026-09-16 no se ejecutaba.
+    // plano si la última tiene más de un minuto. Así no depende de un solo reloj.
+    // El principal es el Worker aparte 'tasita-reloj' (carpeta reloj/), un
+    // despertador de Durable Object que llama a /revisar cada minuto: los cron
+    // de Cloudflare no se ejecutaban en esta cuenta (2026-09-16).
     if (ctx && ctx.waitUntil && url.pathname !== '/webhook-mp' && url.pathname !== '/panel') {
       ctx.waitUntil(revisarSiHaceFalta(env).catch(e => console.error('revisión de arrastre:', e)));
     }
@@ -530,7 +532,9 @@ async function sincronizarPlan(env) {
 // Corre la revisión solo si la última tiene más de SEGUNDOS_ENTRE_REVISIONES.
 // Primero "reserva" el turno con un UPDATE condicional: si llegan diez pedidos
 // juntos, uno solo gana y los demás no le pegan a Mercado Pago.
-const SEGUNDOS_ENTRE_REVISIONES = 60;
+// 50 y no 60: el reloj (tasita-reloj) suena cada 60 s justos, y con 60 se
+// salteaba una vuelta de cada dos.
+const SEGUNDOS_ENTRE_REVISIONES = 50;
 async function revisarSiHaceFalta(env) {
   const ahora = new Date();
   const limite = new Date(ahora.getTime() - SEGUNDOS_ENTRE_REVISIONES * 1000).toISOString();
@@ -973,9 +977,9 @@ function cuerpoPanel(d) {
   const problemas = [];
   if (!c) problemas.push('La revisión con Mercado Pago todavía no corrió nunca.');
   else {
-    // La disparan el reloj externo (cada ~5 min), cada apertura de la app y
-    // cada vez que se abre este panel. Media hora sin correr ya es un problema.
-    if (minutos > 30) problemas.push(`La revisión con Mercado Pago no corre desde hace ${minutos < 120 ? minutos + ' minutos' : Math.round(minutos / 60) + ' horas'}.`);
+    // La dispara tasita-reloj cada minuto (y además cada apertura de la app).
+    // Diez minutos sin correr = el reloj se detuvo.
+    if (minutos > 10) problemas.push(`La revisión con Mercado Pago no corre desde hace ${minutos < 120 ? minutos + ' minutos' : Math.round(minutos / 60) + ' horas'}.`);
     if (c.error) problemas.push(`La última revisión falló: ${c.error}.`);
     for (const p of sinDuenio) {
       problemas.push(`Alguien pagó en Mercado Pago el ${dm(p.desde)}${p.email ? ` (${p.email})` : ''} y no sabemos cuál es su app: seguramente escribió otro email. Pasáselo a Claude para activarlo.`);

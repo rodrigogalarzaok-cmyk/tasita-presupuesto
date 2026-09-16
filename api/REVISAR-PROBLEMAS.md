@@ -35,14 +35,15 @@ curl -s -H "Origin: https://presupuesto.tasita.com.ar" "https://tasita-api.rodri
 quedan en otra aplicación (`application_id` 3909856389923111; la nuestra es 5520349572995061).
 El webhook no va a llegar nunca: **no perder tiempo buscando por ahí.**
 
-Hoy nos enteramos por caminos propios. La revisión (`sincronizarPlan`) corre, como mucho una vez por
-minuto (`revisarSiHaceFalta`), cada vez que llega cualquiera de estos disparadores:
-- **Reloj de GitHub cada 5 minutos**: `.github/workflows/revisar-mercadopago.yml` en `tasita-presupuesto` pega a `/revisar`. Ver corridas: `gh run list -R rodrigogalarzaok-cmyk/tasita-presupuesto --workflow revisar-mercadopago.yml`. Ojo: GitHub apaga los relojes de repos públicos tras 60 días sin commits (se reactiva desde la pestaña Actions).
-- **Alguien abre la app** (cualquier pedido a la API) y **Marc abre el panel** (ahí revisa antes de mostrar).
-- **Cron de Cloudflare** (`* * * * *`): configurado, pero el 2026-09-16 **no se ejecutaba** (0 invocaciones programadas en las estadísticas). No depender de él.
+Hoy nos enteramos por caminos propios. La revisión (`sincronizarPlan`) corre como mucho una vez cada
+50 s (`revisarSiHaceFalta`) y la disparan:
+- **`tasita-reloj` (principal)**: Worker aparte en `TasitaApp/reloj/`, con un despertador de Durable Object que suena cada minuto y llama a `/revisar` por service binding. Estado del reloj (y lo vuelve a poner en marcha si se hubiera detenido): abrir https://tasita-reloj.rodrigogalarzaok.workers.dev/ → `ultimo` tiene que ser de hace menos de un minuto.
+- **Cualquier pedido a la API** (alguien abre la app) y **el panel** (revisa antes de mostrar).
+- **GitHub Actions cada 15 min** (`.github/workflows/revisar-mercadopago.yml`): respaldo que re-arranca el reloj. GitHub no es puntual (el 2026-09-16 tardó más de 30 min en arrancar) y apaga relojes de repos públicos tras 60 días sin commits.
+- **Cron de Cloudflare**: configurado en los dos Workers, pero **en esta cuenta no se ejecutan** (0 invocaciones programadas el 2026-09-16, incluso en un Worker nuevo). No depender de él.
 
 Mirar `control_mp`:
-  - `revisado` de hace más de 30 minutos → ningún disparador está funcionando (el panel lo muestra en rojo). Revisar primero las corridas de GitHub.
+  - `revisado` de hace más de 10 minutos → el reloj se detuvo (el panel lo muestra en rojo). Abrir la dirección de tasita-reloj de arriba y ver `ultimo` / `estado`; redeployar desde `TasitaApp/reloj` con `npx.cmd wrangler deploy`.
   - `error` con texto → MP no respondió o falta el token (`MP_ACCESS_TOKEN`: si dice 401, está vencido o mal cargado; Marc lo renueva en el panel de desarrolladores y lo carga con `npx.cmd wrangler secret put MP_ACCESS_TOKEN`).
 - **Al abrir la app** una persona bloqueada que dejó email (`buscarPagoPorEmail`). En `eventos_mp` queda como `tipo = 'consulta_directa'` cuando activa a alguien.
 
