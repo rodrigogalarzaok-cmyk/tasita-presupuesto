@@ -1633,12 +1633,24 @@ const CAT_BUCKET = new Proxy({}, {
 // ════════════════════════════════════════
 //  FORMAT
 // ════════════════════════════════════════
+// Los movimientos se guardan SIEMPRE en pesos. El modo dólar es solo una
+// forma de mostrarlos: se convierte acá, al momento de dibujar, para que
+// alcance con tocar el botón una vez y toda la app quede en la misma moneda.
+let modoUSD = false;
+let cotizacionMEP = null;
+
+function enUSD() {
+  return modoUSD && cotizacionMEP;
+}
+
 function fmt(n) {
   if (hidden) return '••••••';
+  if (enUSD()) return fmtUSD(n);
   return '$ ' + Math.round(n).toLocaleString('es-AR');
 }
 function fmtPlain(n) {
   if (hidden) return '••••••';
+  if (enUSD()) return (n / cotizacionMEP).toLocaleString('es-AR', { minimumFractionDigits:2, maximumFractionDigits:2 });
   return Math.round(n).toLocaleString('es-AR');
 }
 function fmtDate(iso) {
@@ -1687,8 +1699,7 @@ function thisMonthTxs() {
 //  RENDER HOME
 // ════════════════════════════════════════
 // ── DÓLAR MEP ──────────────────────────────
-let modoUSD = false;
-let cotizacionMEP = null;
+// (modoUSD y cotizacionMEP se declaran arriba, junto a fmt)
 
 async function fetchMEP() {
   // intentar caché primero
@@ -1713,19 +1724,29 @@ async function fetchMEP() {
   }
 }
 
+/* Redibuja las pantallas que están a la vista. Cambiar de moneda no toca
+   ningún dato: solo hay que volver a dibujar lo que ya estaba en pantalla. */
+function refrescarVistas() {
+  renderHome();
+  const visible = v => !document.getElementById('view-'+v).classList.contains('hidden');
+  if (visible('movimientos'))    renderMovimientos();
+  if (visible('presupuestos'))   renderPresupuestos();
+  if (visible('presup-detalle')) refreshDetalleIfOpen();
+}
+
 function toggleUSD() {
   if (!modoUSD && !cotizacionMEP) {
     fetchMEP().then(() => {
       if (!cotizacionMEP) { alert('No se pudo obtener la cotización. Verificá tu conexión.'); return; }
       modoUSD = true;
       actualizarBotonUSD();
-      renderHome();
+      refrescarVistas();
     });
     return;
   }
   modoUSD = !modoUSD;
   actualizarBotonUSD();
-  renderHome();
+  refrescarVistas();
 }
 
 function actualizarBotonUSD() {
@@ -1759,22 +1780,18 @@ function renderHome() {
   const txs = thisMonthTxs();
   const s = getStats(txs);
 
-  const enUSD = modoUSD && cotizacionMEP;
-
   // balance
-  document.getElementById('balance-display').textContent = enUSD
-    ? (hidden ? '••••••' : (s.balance/cotizacionMEP).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2}))
-    : fmtPlain(s.balance);
-  document.querySelector('.balance-amount .currency').textContent = enUSD ? 'U$D ' : '$';
-  document.getElementById('income-display').textContent  = enUSD ? fmtUSD(s.totalInc) : fmt(s.totalInc);
-  document.getElementById('expense-display').textContent = enUSD ? fmtUSD(s.totalExp) : fmt(s.totalExp);
+  document.getElementById('balance-display').textContent = fmtPlain(s.balance);
+  document.querySelector('.balance-amount .currency').textContent = enUSD() ? 'U$D ' : '$';
+  document.getElementById('income-display').textContent  = fmt(s.totalInc);
+  document.getElementById('expense-display').textContent = fmt(s.totalExp);
 
   // gastos por categoría
   const totalGasto = s.fijos + s.vars + s.tarj;
   const pct = (v) => totalGasto > 0 ? Math.round(v/totalGasto*100) : 0;
-  document.getElementById('g-fijos-amt').textContent = enUSD ? fmtUSD(s.fijos) : fmt(s.fijos);
-  document.getElementById('g-vars-amt').textContent  = enUSD ? fmtUSD(s.vars)  : fmt(s.vars);
-  document.getElementById('g-tarj-amt').textContent  = enUSD ? fmtUSD(s.tarj)  : fmt(s.tarj);
+  document.getElementById('g-fijos-amt').textContent = fmt(s.fijos);
+  document.getElementById('g-vars-amt').textContent  = fmt(s.vars);
+  document.getElementById('g-tarj-amt').textContent  = fmt(s.tarj);
   document.getElementById('g-fijos-pct').textContent = pct(s.fijos)+'% del total';
   document.getElementById('g-vars-pct').textContent  = pct(s.vars)+'% del total';
   document.getElementById('g-tarj-pct').textContent  = pct(s.tarj)+'% del total';
@@ -1787,9 +1804,7 @@ function renderHome() {
   // chart balance label
   const sign = s.balance >= 0 ? '+ ' : '− ';
   document.getElementById('chart-balance-label').textContent = hidden ? '••••••'
-    : enUSD
-      ? '+ U$D '+(Math.abs(s.balance)/cotizacionMEP).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})
-      : sign+'$ '+Math.abs(Math.round(s.balance)).toLocaleString('es-AR');
+    : sign + fmt(Math.abs(s.balance));
 
   renderChart(txs);
   renderBarChart();
@@ -1861,7 +1876,7 @@ function renderBarChart() {
     }
 
     // tooltip al tocar
-    col.title = `${nombreMes} ${año}: ${bal >= 0 ? '+' : ''}$ ${Math.round(bal).toLocaleString('es-AR')}`;
+    col.title = `${nombreMes} ${año}: ${bal >= 0 ? '+ ' : '− '}${fmt(Math.abs(bal))}`;
     col.onclick = () => {
       mesSel = año * 100 + mes;
       goTo('movimientos', true);
@@ -1960,7 +1975,7 @@ function movItemHTML(t) {
   const icon = CAT_ICONS[t.categoria] || '💸';
   const sign = t.tipo==='ingreso' ? '+ ' : '− ';
   const cls  = t.tipo==='ingreso' ? 'positive' : 'negative';
-  const amt  = hidden ? '••••••' : sign+'$ '+Math.round(t.monto).toLocaleString('es-AR');
+  const amt  = hidden ? '••••••' : sign+fmt(t.monto);
   return `
     <div class="mov-item" onclick="toggleMovOpciones('${t.id}',event)">
       <div class="mov-icon">${icon}</div>
