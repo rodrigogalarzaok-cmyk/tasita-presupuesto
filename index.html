@@ -1001,16 +1001,9 @@
   <!-- ══════════════════ VIEW: PRESUPUESTOS ══════════════════ -->
   <div class="view hidden" id="view-presupuestos">
     <div class="page-header">
-      <div style="width:44px"></div>
+      <div style="width:36px"></div>
       <h2>Presupuestos</h2>
-      <div style="width:44px; display:flex; justify-content:flex-end;">
-        <button class="usd-toggle-btn" onclick="toggleUSD()" style="
-          background:rgba(77,184,255,0.1); border:1px solid rgba(77,184,255,0.3);
-          border-radius:8px; color:#4DB8FF; font-size:10px; font-weight:700;
-          font-family:inherit; padding:3px 8px; cursor:pointer; letter-spacing:0.5px;
-          transition:all .2s; line-height:1.4;
-        ">USD</button>
-      </div>
+      <div style="width:36px"></div>
     </div>
 
     <!-- selector de mes -->
@@ -1024,6 +1017,13 @@
     <div class="section anim" style="margin-top:10px;">
       <div class="card" style="padding:28px 22px 26px; display:flex; flex-direction:column; align-items:center; position:relative; overflow:hidden;">
         <div style="position:absolute;top:0;left:10%;right:10%;height:1px;background:linear-gradient(90deg,transparent,rgba(130,217,255,0.55),transparent);"></div>
+        <button class="usd-toggle-btn" onclick="toggleUSD()" style="
+          position:absolute; top:14px; right:14px; z-index:2;
+          background:rgba(77,184,255,0.1); border:1px solid rgba(77,184,255,0.3);
+          border-radius:8px; color:#4DB8FF; font-size:10px; font-weight:700;
+          font-family:inherit; padding:3px 8px; cursor:pointer; letter-spacing:0.5px;
+          transition:all .2s; line-height:1.4;
+        ">USD</button>
         <div style="position:relative; width:240px; height:240px;">
           <svg viewBox="0 0 200 200" width="240" height="240" id="presup-donut">
             <defs>
