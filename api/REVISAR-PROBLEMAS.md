@@ -97,8 +97,16 @@ Cómo se reconoce un pago: al tocar "Suscribirme" la app guarda un email pegado 
 
 **Desde el 2026-10-11 lo resuelve la persona sola:** "Recuperar mi cuenta" (en la bienvenida, en el
 cartel de pago y en Más) — escribe su código viejo y la app pasa a usar ese, juntando lo que haya
-cargado en el nuevo. Solo hace falta su código (Más → Mi código en el celular viejo). Si no lo tiene,
-seguir con lo de abajo.
+cargado en el nuevo. Solo hace falta su código (Más → Mi código en el celular viejo).
+
+**No sabe su código** (decisión de Marc 2026-10-11: alcanza con el email, no se guarda nada más):
+Marc pasa el email que la persona le da, se busca su código y Marc se lo pasa para que lo escriba en
+"Recuperar mi cuenta". Solo funciona con quien tocó "Suscribirme" (los que pagan siempre lo dejaron):
+```
+npx.cmd wrangler d1 execute tasita --remote --json --command "SELECT codigo, activa, hasta, estado FROM suscripciones WHERE email = 'EMAIL';"
+```
+Si no aparece, probar variantes (gmail/hotmail, una letra) con `WHERE email LIKE '%parte%'`.
+Si igual no: seguir con lo de abajo.
 
 El código vive en el navegador. Instagram → Chrome → app instalada pueden ser 3 códigos distintos.
 Si pagó desde uno y abre otro, ese otro no tiene suscripción.
