@@ -715,6 +715,18 @@
       margin-top: 14px; text-align: center; font-size: 12.5px;
       color: var(--text3); cursor: pointer; text-decoration: underline;
     }
+    /* Señala el ••• de Instagram en iPhone (está arriba a la derecha, fuera de la página) */
+    #flecha-menu {
+      position: fixed; top: max(6px, env(safe-area-inset-top)); right: 18px; z-index: 600;
+      display: none; pointer-events: none; color: #4db8ff;
+      filter: drop-shadow(0 0 8px rgba(77,184,255,0.7));
+      animation: flechaMenu 1s ease-in-out infinite;
+    }
+    #flecha-menu.visible { display: block; }
+    @keyframes flechaMenu {
+      0%, 100% { transform: translate(0, 0); }
+      50%      { transform: translate(5px, -7px); }
+    }
     .welcome-pasos { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
     .welcome-paso {
       display: flex; align-items: flex-start; gap: 10px; text-align: left;
@@ -1494,6 +1506,13 @@
       </div>
       <div id="email-msg" style="font-size:12px;color:#e05555;text-align:center;margin-top:10px;line-height:1.5"></div>
     </div>
+  </div>
+
+  <div id="flecha-menu" aria-hidden="true">
+    <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+         stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7 17 17 7"/><path d="M8 7h9v9"/>
+    </svg>
   </div>
 
   <!-- Recuperar mi cuenta: quien borró la app o cambió de celular/navegador
@@ -2966,9 +2985,17 @@ function planInstalarWelcome() {
     sub: `Estás viendo Tasita dentro de ${app}, y desde acá el celular no deja instalarla. Te llevamos a Chrome.`,
     btn: 'Instalar Tasita', accion: 'chrome'
   };
+  // iPhone dentro de Instagram: no hay botón que saque a Safari (el truco
+  // x-safari- lo bloquea Instagram, probado por Marc el 2026-10-11: el botón
+  // "Abrir en Safari" no hacía nada). Lo único que funciona es el menú ••• de
+  // Instagram, así que se muestran los pasos de entrada con una flecha que lo
+  // señala, sin un botón que prometa algo que no puede hacer.
   if (app && esIOS()) return {
-    sub: `Estás viendo Tasita dentro de ${app}, y desde acá el iPhone no deja instalarla. Hay que abrirla en Safari.`,
-    btn: 'Abrir en Safari', accion: 'safari'
+    sub: `Estás viendo Tasita dentro de ${app}. Para instalarla hay que abrirla en Safari:`,
+    pasos: ['Tocá los ••• arriba a la derecha ↗',
+            'Elegí "Abrir en el navegador externo"',
+            'En Safari: Compartir 📤 → "Agregar a inicio"'],
+    btn: 'Seguir acá por ahora', accion: 'seguir', flecha: true
   };
   if (app) return {
     sub: `Estás viendo Tasita dentro de ${app}. Para tenerla en tu pantalla de inicio hay que abrirla en tu navegador.`,
@@ -3035,9 +3062,11 @@ function pasoInstalarWelcome() {
   document.getElementById('welcome-inst-saltar').style.display = p.accion === 'seguir' ? 'none' : '';
   document.getElementById('welcome-card-instalar').style.display = '';
   document.getElementById('welcome-card-nombre').style.display   = 'none';
+  mostrarFlechaMenu(!!p.flecha);
 }
 
 function pasoNombreWelcome() {
+  mostrarFlechaMenu(false);
   document.getElementById('welcome-card-instalar').style.display = 'none';
   document.getElementById('welcome-card-nombre').style.display   = '';
   setTimeout(() => document.getElementById('welcome-name-input').focus(), 350);
@@ -3053,7 +3082,6 @@ function accionInstalarWelcome() {
   // El salto a Chrome/Safari puede no prender; avisarSiNoSalto muestra los
   // pasos a mano a segundo y medio si seguimos acá.
   if (p.accion === 'chrome')        { saltarAChrome(); avisarSiNoSalto(app); return; }
-  if (p.accion === 'safari')        { saltarASafari(); avisarSiNoSalto(app); return; }
 
   if (p.accion === 'prompt' && deferredInstallPrompt) {
     deferredInstallPrompt.prompt();
@@ -3783,6 +3811,10 @@ updateFechaLabel();
 actualizarSaludo();
 miCodigo();      // genera el código anónimo la primera vez (o adopta el del salto)
 limpiarURL();    // saca el código de la barra de direcciones si vino en ella
+// Adentro de Instagram y cía. la barra lleva el código, para que al salir por
+// el menú ••• el navegador de verdad lo adopte (ver codigoEnLaBarra).
+codigoEnLaBarra();
+setInterval(codigoEnLaBarra, 60000);
 // Quien ya venía usando la app desde la beta arranca sus días acá, la primera
 // vez que la abre con el cobro prendido. Quien es nuevo, al guardar su nombre.
 arrancarPruebaSiCorresponde();
@@ -3849,16 +3881,25 @@ function saltarAChrome() {
 }
 
 // ── iPhone. Apple no tiene nada como intent://: una página no puede abrir otro
-//    navegador. Esta dirección especial es lo único que a veces funciona para
-//    salir a Safari desde el navegador de Instagram, y depende de la versión de
-//    esa app, así que puede no prender. Cuando no prende, avisarSiNoSalto
-//    muestra los pasos a mano, que es lo que se hacía hasta ahora.
-function urlSafari() {
-  return 'x-safari-' + urlConCodigo(location.origin + location.pathname);
+//    navegador. Se probó 'x-safari-https://…' y el navegador de Instagram lo
+//    bloquea (2026-10-11), así que en iPhone la salida es SIEMPRE el menú •••.
+//
+//    Para que la persona no llegue a Safari como alguien nuevo (sin sus días
+//    de prueba ni sus movimientos), mientras está adentro de Instagram la
+//    dirección de la barra lleva su código: "Abrir en el navegador externo"
+//    abre esa misma dirección y Safari lo adopta (ver codigoDeLaURL). Se
+//    renueva cada minuto porque el código de la dirección vence a los 10.
+function codigoEnLaBarra() {
+  if (!navegadorInApp()) return;
+  try {
+    history.replaceState(null, '', urlConCodigo(location.pathname) + location.hash);
+  } catch (e) { /* si no deja, se sale igual, solo que sin el código */ }
 }
 
-function saltarASafari() {
-  window.location.href = urlSafari();
+// Flecha que señala el ••• de Instagram, arriba a la derecha (fuera de la página).
+function mostrarFlechaMenu(si) {
+  const f = document.getElementById('flecha-menu');
+  if (f) f.classList.toggle('visible', !!si && esIOS() && !!navegadorInApp());
 }
 
 // Si el salto no prende (Chrome deshabilitado, o el navegador lo bloquea) no
@@ -3911,6 +3952,7 @@ window.addEventListener('appinstalled', () => {
 
 function cerrarInstalar() {
   document.getElementById('instalar-overlay').classList.remove('open');
+  mostrarFlechaMenu(false);
 }
 
 const AVISO_KEY = 'tasita_aviso_instalar';
@@ -3958,7 +4000,9 @@ function abrirInstruccionesInApp(app) {
   const puntos    = esIOS() ? '•••' : '⋮';
   document.getElementById('instalar-texto').textContent =
     `1. Tocá los ${puntos} arriba a la derecha\n` +
-    `2. Elegí "Abrir en ${navegador}" (o "Abrir en el navegador")\n` +
+    (esIOS()
+      ? `2. Elegí "Abrir en el navegador externo"\n`
+      : `2. Elegí "Abrir en ${navegador}" (o "Abrir en el navegador")\n`) +
     (esIOS()
       ? `3. Ya en Safari: tocá Compartir 📤 y después "Agregar a inicio"\n\n`
       : `3. Ahí te va a aparecer el cartel para instalarla\n\n`) +
@@ -3968,6 +4012,7 @@ function abrirInstruccionesInApp(app) {
     `Si no encontrás esa opción, copiá el link acá abajo y pegalo en tu buscador.`;
   document.getElementById('instalar-msg').textContent = '';
   document.getElementById('instalar-overlay').classList.add('open');
+  mostrarFlechaMenu(true);
 }
 
 function copiarLinkApp() {
@@ -4008,10 +4053,9 @@ function clickInstalarApp() {
   if (esStandalone()) { showToast('Tasita ya está instalada en tu celular'); return; }
   const app = navegadorInApp();
   if (app) {
-    // Se intenta salir al navegador de verdad: en Android casi siempre prende,
-    // en iPhone es a suerte. Los dos casos caen en las instrucciones si falla.
+    // En Android se salta a Chrome (casi siempre prende; si no, instrucciones).
+    // En iPhone no hay salto posible: directo a los pasos del menú •••.
     if (esAndroid()) saltarAChrome();
-    else if (esIOS()) saltarASafari();
     else { abrirInstruccionesInApp(app); return; }
     avisarSiNoSalto(app);
     return;
