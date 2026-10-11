@@ -1193,6 +1193,16 @@
           </div>
           <div style="color:var(--text3);font-size:13px">copiar</div>
         </div>
+        <div style="font-size:11px;color:var(--text3);padding:0 20px 12px;line-height:1.4">
+          Guardalo: si borrás la app o cambiás de celular, con este código recuperás todo.
+        </div>
+        <div class="modal-row" style="padding:14px 20px;border-top:1px solid var(--border)" onclick="abrirRecuperar()">
+          <div class="modal-row-left">
+            <div class="modal-row-icon">↩️</div>
+            <span style="font-weight:600;font-size:15px">Recuperar mi cuenta</span>
+          </div>
+          <div style="color:var(--text3);font-size:13px">›</div>
+        </div>
       </div>
     </div>
     <div class="section" style="margin-top:8px">
@@ -1402,6 +1412,9 @@
       <div class="welcome-btn disabled" id="welcome-btn" onclick="confirmWelcome()">
         Empezar 🚀
       </div>
+      <div class="welcome-link" onclick="abrirRecuperar()">
+        ¿Ya usabas Tasita? Recuperar mi cuenta
+      </div>
     </div>
   </div>
 
@@ -1445,6 +1458,9 @@
       <div onclick="yaPague()" style="text-align:center;font-size:13px;color:var(--accent);margin-top:16px;cursor:pointer;font-weight:600">
         Ya pagué, activar
       </div>
+      <div onclick="abrirRecuperar()" style="text-align:center;font-size:12px;color:var(--text3);margin-top:12px;cursor:pointer">
+        ¿Ya tenías una cuenta? <span style="color:var(--accent);font-weight:600">Recuperarla</span>
+      </div>
       <div id="paywall-msg" style="font-size:12px;color:var(--text3);text-align:center;margin-top:12px;line-height:1.5"></div>
       <div style="text-align:center;font-size:11px;color:var(--text3);margin-top:18px;opacity:0.7">
         Tu código: <span id="paywall-codigo" style="font-family:monospace;letter-spacing:0.5px"></span>
@@ -1477,6 +1493,35 @@
         Cancelar
       </div>
       <div id="email-msg" style="font-size:12px;color:#e05555;text-align:center;margin-top:10px;line-height:1.5"></div>
+    </div>
+  </div>
+
+  <!-- Recuperar mi cuenta: quien borró la app o cambió de celular/navegador
+       escribe su código anterior y vuelve a tener sus movimientos y su
+       suscripción. Va arriba del paywall y de la bienvenida. -->
+  <div class="welcome-overlay" id="recuperar-overlay" style="z-index:540">
+    <div class="welcome-card">
+      <div class="welcome-title">Recuperar mi cuenta</div>
+      <div class="welcome-sub">
+        Escribí el código de tu cuenta anterior. Lo ves en Más → Mi código,
+        en el celular o navegador donde usabas Tasita.
+      </div>
+      <input
+        class="welcome-input" id="recuperar-input"
+        type="text" autocomplete="off" autocapitalize="off" spellcheck="false"
+        placeholder="tas_xxxxxxxxxx"
+        maxlength="30"
+        style="font-family:monospace"
+        oninput="onRecuperarInput()"
+        onkeydown="if(event.key==='Enter') confirmarRecuperar()"
+      />
+      <div class="welcome-btn disabled" id="recuperar-btn" onclick="confirmarRecuperar()">
+        Recuperar
+      </div>
+      <div onclick="cerrarRecuperar()" style="text-align:center;font-size:13px;color:var(--text3);margin-top:14px;cursor:pointer">
+        Cancelar
+      </div>
+      <div id="recuperar-msg" style="font-size:12px;color:#e05555;text-align:center;margin-top:10px;line-height:1.5"></div>
     </div>
   </div>
 
@@ -3381,6 +3426,91 @@ function copiarCodigo() {
   };
   if (navigator.clipboard) navigator.clipboard.writeText(cod).then(done).catch(done);
   else done();
+}
+
+// ── Recuperar mi cuenta.
+//
+//    El código vive en el navegador: si la persona borra la app, cambia de
+//    celular o entra desde otro navegador, la app le arma uno nuevo y queda en
+//    una cuenta vacía, sin sus movimientos y sin su suscripción (o su cuenta
+//    libre). Acá escribe el código viejo y la app pasa a usar ese.
+//
+//    - Solo se adopta un código que el servidor conoce: uno mal tipeado no
+//      la deja parada en una cuenta vacía.
+//    - Lo que haya cargado en la cuenta nueva no se pierde: se junta con lo de
+//      la cuenta recuperada (la sincronización ya funde los dos lados).
+//    - No se recupera por email: quien supiera el email de otro se llevaría
+//      sus movimientos. El código es lo único que hace de llave.
+function normalizarCodigo(v) {
+  let c = String(v || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (c.startsWith('tas-')) c = 'tas_' + c.slice(4);
+  else if (c && !c.startsWith('tas_')) c = 'tas_' + c;   // lo escribió sin el "tas_"
+  return /^tas_[a-z0-9]{4,20}$/.test(c) ? c : null;
+}
+
+function abrirRecuperar() {
+  const inp = document.getElementById('recuperar-input');
+  inp.value = '';
+  onRecuperarInput();
+  document.getElementById('recuperar-msg').textContent = '';
+  document.getElementById('recuperar-overlay').classList.add('open');
+  setTimeout(() => inp.focus(), 350);
+}
+
+function cerrarRecuperar() { document.getElementById('recuperar-overlay').classList.remove('open'); }
+
+function onRecuperarInput() {
+  const ok = !!normalizarCodigo(document.getElementById('recuperar-input').value);
+  document.getElementById('recuperar-btn').classList.toggle('disabled', !ok);
+}
+
+let recuperando = false;
+async function confirmarRecuperar() {
+  const msg = document.getElementById('recuperar-msg');
+  const codigo = normalizarCodigo(document.getElementById('recuperar-input').value);
+  if (!codigo || recuperando) return;
+  if (codigo === miCodigo()) {
+    msg.style.color = '#4ADE80';
+    msg.textContent = 'Ya estás en esa cuenta.';
+    return;
+  }
+  if (!PAGOS.API_URL) { msg.style.color = '#e05555'; msg.textContent = 'No se puede recuperar en este momento.'; return; }
+
+  recuperando = true;
+  msg.style.color = 'var(--text3)';
+  msg.textContent = 'Buscando tu cuenta…';
+  try {
+    const r = await fetch(`${PAGOS.API_URL}/existe?codigo=${encodeURIComponent(codigo)}`, { cache: 'no-store' });
+    const res = r.ok ? await r.json() : null;
+    if (!res) { msg.style.color = '#e05555'; msg.textContent = 'No pudimos buscarla. Probá de nuevo en un rato.'; return; }
+    if (!res.existe) {
+      msg.style.color = '#e05555';
+      msg.textContent = 'No encontramos ese código. Revisalo letra por letra.';
+      return;
+    }
+
+    // Se pasa a la cuenta recuperada. Lo que se sabía de la cuenta nueva
+    // (versión de la base, suscripción, email) era de ella, no de esta.
+    localStorage.setItem(ID_KEY, codigo);
+    localStorage.removeItem(VER_KEY);
+    localStorage.removeItem(SUB_KEY);
+    localStorage.removeItem(EMAIL_KEY);
+
+    msg.textContent = 'Trayendo tus movimientos…';
+    await sincronizar();
+    await verificarSuscripcion();
+    actualizarSubUI();
+    aplicarPaywall();
+    refrescarPantallas();
+
+    cerrarRecuperar();
+    showToast('¡Listo! Recuperaste tu cuenta');
+  } catch (e) {
+    msg.style.color = '#e05555';
+    msg.textContent = 'No pudimos conectarnos. Revisá tu internet y probá de nuevo.';
+  } finally {
+    recuperando = false;
+  }
 }
 
 function actualizarSubUI() {

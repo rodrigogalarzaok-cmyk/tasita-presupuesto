@@ -67,6 +67,9 @@ export default {
       if (url.pathname === '/webhook-mp' && request.method === 'POST') {
         return await webhookMP(request, url, env);
       }
+      if (url.pathname === '/existe' && request.method === 'GET') {
+        return await existeCodigo(url, env);
+      }
       if (url.pathname === '/datos' && request.method === 'GET') {
         visita(codigoValido(url.searchParams.get('codigo')));
         return await getDatos(url, env);
@@ -202,6 +205,22 @@ async function putDatos(request, env, visita) {
   `).bind(codigo, contenido, nueva, new Date().toISOString()).run();
 
   return responder({ ok: true, version: nueva }, 200, env);
+}
+
+// ── "Recuperar mi cuenta": ¿este código existe? Antes de que la app se lo
+//    adopte, para que un código mal tipeado no la deje en una cuenta vacía.
+//    A propósito NO anota visita: un código inventado no tiene que aparecer
+//    como persona en el panel. Y no devuelve nada más que sí o no.
+async function existeCodigo(url, env) {
+  const codigo = codigoValido(url.searchParams.get('codigo'));
+  if (!codigo) return responder({ existe: false }, 200, env);
+  const fila = await env.DB.prepare(`
+    SELECT 1 FROM usuarios WHERE codigo = ?1
+    UNION SELECT 1 FROM datos WHERE codigo = ?1
+    UNION SELECT 1 FROM suscripciones WHERE codigo = ?1
+    LIMIT 1
+  `).bind(codigo).first();
+  return responder({ existe: !!fila }, 200, env);
 }
 
 function codigoValido(c) {
