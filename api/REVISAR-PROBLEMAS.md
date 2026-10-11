@@ -95,6 +95,11 @@ Cómo se reconoce un pago: al tocar "Suscribirme" la app guarda un email pegado 
 
 ## 4. Tiene la suscripción, pero en OTRO celular o navegador
 
+**Desde el 2026-10-11 lo resuelve la persona sola:** "Recuperar mi cuenta" (en la bienvenida, en el
+cartel de pago y en Más) — escribe su código viejo y la app pasa a usar ese, juntando lo que haya
+cargado en el nuevo. Solo hace falta su código (Más → Mi código en el celular viejo). Si no lo tiene,
+seguir con lo de abajo.
+
 El código vive en el navegador. Instagram → Chrome → app instalada pueden ser 3 códigos distintos.
 Si pagó desde uno y abre otro, ese otro no tiene suscripción.
 - Síntoma: al tocar "Suscribirme" con su email le sale *"Ese email ya tiene una suscripción activa en otro dispositivo"* (es el candado anti-robo, `409 ocupado`: **no sacarlo**).
