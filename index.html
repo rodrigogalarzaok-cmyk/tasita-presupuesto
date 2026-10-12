@@ -1205,10 +1205,11 @@
           </div>
           <div style="color:var(--text3);font-size:13px">copiar</div>
         </div>
-        <div style="font-size:11px;color:var(--text3);padding:0 20px 12px;line-height:1.4">
-          Guardalo: si borrás la app o cambiás de celular, con este código recuperás todo.
-        </div>
-        <div class="modal-row" style="padding:14px 20px;border-top:1px solid var(--border)" onclick="abrirRecuperar()">
+      </div>
+    </div>
+    <div class="section" style="margin-top:8px" id="recuperar-section">
+      <div class="card" style="padding:0">
+        <div class="modal-row" style="padding:14px 20px" onclick="abrirRecuperar()">
           <div class="modal-row-left">
             <div class="modal-row-icon">↩️</div>
             <span style="font-weight:600;font-size:15px">Recuperar mi cuenta</span>
@@ -3546,6 +3547,8 @@ function actualizarSubUI() {
   if (cod) cod.textContent = miCodigo();
   const codSec = document.getElementById('codigo-section');
   if (codSec) codSec.style.display = PAGOS.COBRO_ACTIVO ? '' : 'none';
+  const recSec = document.getElementById('recuperar-section');
+  if (recSec) recSec.style.display = PAGOS.COBRO_ACTIVO ? '' : 'none';
   const lbl = document.getElementById('sub-estado-label');
   if (lbl) {
     const s = estadoSuscripcion();
